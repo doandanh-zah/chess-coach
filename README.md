@@ -2,6 +2,8 @@
 
 Bàn cờ luyện tập chạy hoàn toàn trên trình duyệt: Stockfish 19 (WASM) chấm điểm từng nước đi và gợi ý các nước tốt nhất.
 
+**Demo:** https://chess-coach-ten-nu.vercel.app
+
 ## Chạy
 
 ```bash
