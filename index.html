@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Chess Coach</title>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">♞ Chess Coach <span class="engine-tag">Stockfish 19</span></div>
+      <div class="status" id="status">Đang tải engine…</div>
+    </header>
+
+    <main class="layout">
+      <section class="board-area">
+        <div class="eval-bar" id="evalBar">
+          <div class="eval-fill" id="evalFill"></div>
+          <span class="eval-text" id="evalText">0.0</span>
+        </div>
+        <div class="board-wrap">
+          <div id="board" class="board"></div>
+          <div class="promo" id="promo" hidden></div>
+        </div>
+      </section>
+
+      <aside class="panel">
+        <div class="controls play-only">
+          <button id="btnHint" class="primary" title="Ẩn/hiện gợi ý (phím H)">💡 Gợi ý</button>
+          <button id="btnUndo" title="Phím ←">↶ Đi lại</button>
+          <button id="btnFlip" title="Phím F">⇅ Lật</button>
+          <button id="btnEdit" title="Tự xếp quân để tạo thế cờ">✏️ Xếp cờ</button>
+          <button id="btnNew">⟲ Ván mới</button>
+        </div>
+
+        <div class="card editor" id="editor">
+          <div class="card-title">✏️ Xếp thế cờ</div>
+          <p class="muted small">
+            Kéo quân từ bảng dưới vào bàn cờ, hoặc chọn quân rồi bấm vào ô (bấm lại để bỏ).
+            Kéo quân ra ngoài bàn để xóa. Chọn ✋ để di chuyển quân trên bàn.
+          </p>
+          <div class="palette cg-wrap" id="palette"></div>
+          <label class="field">Bên đi tiếp
+            <select id="editTurn">
+              <option value="w">Trắng đi</option>
+              <option value="b">Đen đi</option>
+            </select>
+          </label>
+          <div class="edit-actions">
+            <button id="editEmpty" type="button">Bàn trống</button>
+            <button id="editStart" type="button">Thế ban đầu</button>
+            <button id="editFlip" type="button">⇅ Lật bàn</button>
+          </div>
+          <label class="field">FEN
+            <input id="editFen" type="text" spellcheck="false" autocomplete="off" />
+          </label>
+          <div class="error" id="editError"></div>
+          <div class="edit-finish">
+            <button id="editCancel" type="button">Huỷ</button>
+            <button id="editDone" type="button" class="primary">✓ Xong — phân tích</button>
+          </div>
+        </div>
+
+        <div class="card feedback play-only" id="feedback">
+          <div class="muted">Đi một nước để được chấm điểm.</div>
+        </div>
+
+        <div class="card play-only" id="hintCard" hidden>
+          <div class="card-title">
+            Nước đi gợi ý <span class="muted small" id="hintDepth"></span>
+          </div>
+          <ol class="hints" id="hints"></ol>
+        </div>
+
+        <div class="card play-only">
+          <div class="card-title">Độ chính xác</div>
+          <div class="accuracy">
+            <div><span class="dot white"></span>Trắng <b id="accW">–</b></div>
+            <div><span class="dot black"></span>Đen <b id="accB">–</b></div>
+          </div>
+        </div>
+
+        <div class="card moves-card play-only">
+          <div class="card-title">Biên bản</div>
+          <div class="moves" id="moves"></div>
+        </div>
+
+        <details class="card settings play-only">
+          <summary class="card-title">⚙️ Cài đặt</summary>
+          <label>Chế độ
+            <select id="setMode">
+              <option value="self">Tự chơi cả hai bên</option>
+              <option value="bot">Đấu với máy</option>
+            </select>
+          </label>
+          <label class="bot-only">Bạn cầm quân
+            <select id="setColor">
+              <option value="white">Trắng</option>
+              <option value="black">Đen</option>
+            </select>
+          </label>
+          <label class="bot-only">Sức mạnh của máy: <b id="skillVal"></b>
+            <input type="range" id="setSkill" min="0" max="20" step="1" />
+          </label>
+          <label>Độ sâu phân tích: <b id="depthVal"></b>
+            <input type="range" id="setDepth" min="8" max="22" step="1" />
+          </label>
+          <label>Số nước gợi ý
+            <select id="setMultipv">
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+            </select>
+          </label>
+          <label class="check"><input type="checkbox" id="setAutoHint" /> Luôn hiện gợi ý</label>
+          <label class="check"><input type="checkbox" id="setEvalBar" /> Hiện thanh đánh giá</label>
+          <p class="muted small">Đổi chế độ hoặc màu quân sẽ bắt đầu ván mới.</p>
+        </details>
+      </aside>
+    </main>
+
+    <footer class="foot muted small">
+      Engine: <a href="https://github.com/official-stockfish/Stockfish" target="_blank" rel="noopener">Stockfish</a>
+      (GPL-3.0) qua <a href="https://github.com/nmrugg/stockfish.js" target="_blank" rel="noopener">stockfish.js</a>.
+      Dùng để luyện tập offline — không dùng trong ván đấu với người thật.
+    </footer>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
