@@ -24,7 +24,7 @@ const $ = (id) => document.getElementById(id);
 const DEFAULTS = {
   mode: 'self',
   color: 'white',
-  skill: 5,
+  botBand: '71-80',
   depth: 14,
   multipv: 3,
   autoHint: true,
@@ -273,12 +273,64 @@ function playMove(uci) {
   if (isBotTurn() && !chess.isGameOver()) botMove();
 }
 
+// ---------- bot opponent ----------
+// The bot plays at a chosen accuracy band: it scores up to 20 candidate moves,
+// then samples one whose per-move accuracy is close to what keeps its running
+// game accuracy inside the band. Mostly sensible moves, with human-like slips.
+const BOT_BANDS = {
+  '60-70': [60, 70],
+  '71-80': [71, 80],
+  '81-85': [81, 85],
+  '86-90': [86, 90],
+  '91-100': [91, 100],
+};
+
+function botAccuracySoFar() {
+  const accs = history
+    .filter((h) => h.color === botColor() && h.uci && h.result?.cls !== 'forced')
+    .map((h) => (h.result ? moveAccuracy(h.result.loss) : h.botAcc))
+    .filter((x) => x !== undefined);
+  return accs.length ? accs.reduce((s, x) => s + x, 0) / accs.length : null;
+}
+
+function pickBotMove(analysis) {
+  const [lo, hi] = BOT_BANDS[settings.botBand] ?? BOT_BANDS['71-80'];
+  const target = (lo + hi) / 2;
+  const avg = botAccuracySoFar() ?? target;
+  // Aim this move so the running average drifts back towards the band's middle.
+  const desired = Math.max(5, Math.min(100, target + 2.5 * (target - avg)));
+  const top = winPct(analysis.lines[0]);
+  const cands = analysis.lines.map((l) => ({
+    uci: l.pv[0],
+    acc: moveAccuracy(Math.max(0, top - winPct(l))),
+    weight: 1,
+  }));
+  const sigma = 8;
+  for (const c of cands) {
+    c.weight = Math.exp(-((c.acc - desired) ** 2) / (2 * sigma * sigma)) + 1e-9;
+  }
+  const total = cands.reduce((s, c) => s + c.weight, 0);
+  let r = Math.random() * total;
+  for (const c of cands) {
+    r -= c.weight;
+    if (r <= 0) return c;
+  }
+  return cands[0];
+}
+
 async function botMove() {
   const entry = current();
-  await bot.setOption('Skill Level', settings.skill);
-  const a = await bot.analyze(entry.fen, { movetime: 300 + settings.skill * 40 });
+  const legal = new Chess(entry.fen).moves().length;
+  const started = Date.now();
+  const a = await bot.analyze(entry.fen, { depth: 10, multipv: Math.min(legal, 20) });
   if (!a || reviewing || editing || current() !== entry || !isBotTurn()) return;
-  playMove(a.bestmove);
+  const pick = a.lines.length ? pickBotMove(a) : { uci: a.bestmove };
+  // A short pause so instant replies don't feel robotic.
+  const wait = 400 - (Date.now() - started);
+  if (wait > 0) await new Promise((res) => setTimeout(res, wait));
+  if (reviewing || editing || current() !== entry || !isBotTurn()) return;
+  playMove(pick.uci);
+  if (current().uci === pick.uci) current().botAcc = pick.acc;
 }
 
 function askPromotion(color, done) {
@@ -623,8 +675,7 @@ function bindSettings() {
   const sync = () => {
     $('setMode').value = settings.mode;
     $('setColor').value = settings.color;
-    $('setSkill').value = settings.skill;
-    $('skillVal').textContent = `${settings.skill}/20`;
+    $('setBand').value = settings.botBand;
     $('setDepth').value = settings.depth;
     $('depthVal').textContent = settings.depth;
     $('setMultipv').value = settings.multipv;
@@ -650,7 +701,7 @@ function bindSettings() {
     settings.color = t.value;
     if (settings.mode === 'bot') restart();
   });
-  on('setSkill', 'input', (t) => (settings.skill = +t.value));
+  on('setBand', 'change', (t) => (settings.botBand = t.value));
   const reanalyze = () => {
     analyst.stopAll();
     analyses.clear();

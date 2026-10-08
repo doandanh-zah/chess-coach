@@ -15,7 +15,7 @@ Build tĩnh: `npm run build` → thư mục `dist/` (host ở đâu cũng đư�
 
 ## Tính năng
 
-- Chế độ **tự chơi cả hai bên** hoặc **đấu với máy** (Skill 0–20, chọn màu quân).
+- Chế độ **tự chơi cả hai bên** hoặc **đấu với máy** (chọn **độ chính xác của máy**: 60–70 / 71–80 / 81–85 / 86–90 / 91–100%, chọn màu quân). Máy xét tới 12 nước ứng viên và chọn ngẫu nhiên có điều khiển để độ chính xác cả ván nằm trong mốc — phần lớn đi hợp lý, thỉnh thoảng sai như người thật.
 - Mỗi nước đi được chấm: Thiên tài `!!`, Tuyệt vời `!`, Tốt nhất `★`, Xuất sắc, Tốt, Bắt buộc, Thiếu chính xác `?!`, Sai lầm `?`, Nước đi tệ `??`.
 - **Gợi ý luôn hiện**: top 2–5 nước kèm nhãn, điểm, biến chính và mũi tên trên bàn; bấm để đi. Nút 💡 / phím `H` để tạm ẩn; tắt hẳn trong Cài đặt.
 - **Giải thích vì sao** (`src/explain.js`): mỗi nước gợi ý kèm lý do — chiếu hết / đe dọa chiếu hết, chĩa đôi, ghim, xiên, mở đường tấn công, ăn quân không được bảo vệ, thí quân, phong cấp, Tốt thông, phát triển quân, chiếm trung tâm, nhập thành, cột mở, lợi vật chất theo biến chính. Nước bạn vừa đi chưa tốt thì app chỉ ra cách đối phương trừng phạt và vì sao nước tốt nhất hay hơn.
