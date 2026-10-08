@@ -15,6 +15,7 @@ import {
   uciToMove,
   winPct,
 } from './classify.js';
+import { explainMove, replyLine } from './explain.js';
 
 const ENGINE_URL = '/engine/stockfish-19-lite-single.js';
 const $ = (id) => document.getElementById(id);
@@ -186,7 +187,10 @@ async function analyzeCurrent() {
   const a = await getAnalysis(entry.fen);
   if (!a || current() !== entry) return;
   entry.analysis = a;
-  entry.candidates = classifyCandidates(entry.fen, a);
+  entry.candidates = classifyCandidates(entry.fen, a).map((c, i) => ({
+    ...c,
+    reasons: explainMove(entry.fen, c.line, { max: i === 0 ? 3 : 2 }),
+  }));
   renderAll();
 }
 
@@ -202,7 +206,24 @@ async function gradeMove(entry) {
     after = await getAnalysis(entry.fen);
     if (!after || !history.includes(entry)) return;
   }
-  entry.result = classifyMove(prev.fen, entry.uci, before, after);
+  const r = classifyMove(prev.fen, entry.uci, before, after);
+  r.isTop = ['brilliant', 'great', 'best', 'forced'].includes(r.cls) || r.bestUci === entry.uci;
+
+  // The played move as an engine line: from `before` if it was a candidate,
+  // otherwise the move followed by the best line of the resulting position.
+  const reply = after?.lines?.[0];
+  const own = before.lines.find((l) => l.pv[0] === entry.uci) ??
+    (reply
+      ? { pv: [entry.uci, ...reply.pv], cp: reply.cp === undefined ? undefined : -reply.cp, mate: reply.mate === undefined ? undefined : -reply.mate }
+      : { pv: [entry.uci] });
+  r.reasons = explainMove(prev.fen, own);
+  if (!r.isTop) r.bestReasons = explainMove(prev.fen, before.lines[0], { max: 2 });
+  if (['inaccuracy', 'mistake', 'blunder'].includes(r.cls) && own.pv.length > 1) {
+    const refute = replyLine(own);
+    r.refutationSan = uciToSan(entry.fen, refute.pv[0]);
+    r.refutation = explainMove(entry.fen, refute, { max: 2 }).filter((t) => !t.startsWith('Đối phương nên đáp'));
+  }
+  entry.result = r;
   renderAll();
 }
 
@@ -402,7 +423,6 @@ function renderFeedback() {
   const c = CLASSES[r.cls];
   const prevFen = history[idx - 1].fen;
   const bestSan = uciToSan(prevFen, r.bestUci);
-  const isTop = ['brilliant', 'great', 'best', 'forced'].includes(r.cls) || r.bestUci === entry.uci;
   const who = entry.color === 'w' ? 'Trắng' : 'Đen';
   const explain = {
     brilliant: 'Hy sinh quân đầy chính xác — đúng chất thiên tài!',
@@ -423,9 +443,25 @@ function renderFeedback() {
         <div class="muted small">${who} · ${moveNo(entry)} · tỉ lệ thắng ${r.winBefore.toFixed(0)}% → ${r.winAfter.toFixed(0)}%</div>
       </div>
     </div>
-    <div class="fb-body">${explain}${
-      isTop ? '' : ` Nước tốt nhất là <b class="best-san">${bestSan}</b>.`
-    }</div>`;
+    <div class="fb-body">${explain}</div>
+    ${
+      r.refutation
+        ? `<div class="why-block"><div class="why-title">Vì sao chưa tốt?</div>
+           <div class="why"><div>Đối phương có thể đáp <b>${r.refutationSan}</b></div>${whyHtml(r.refutation)}</div></div>`
+        : r.reasons?.length && r.cls !== 'forced'
+          ? `<div class="why-block"><div class="why-title">Vì sao nước này hay?</div><div class="why">${whyHtml(r.reasons)}</div></div>`
+          : ''
+    }
+    ${
+      r.isTop
+        ? ''
+        : `<div class="why-block"><div class="why-title">Nước tốt nhất: <b class="best-san">${bestSan}</b></div>
+           <div class="why">${whyHtml(r.bestReasons ?? [])}</div></div>`
+    }`;
+}
+
+function whyHtml(reasons) {
+  return reasons.map((t) => `<div>${t}</div>`).join('');
 }
 
 function moveNo(entry) {
@@ -455,7 +491,8 @@ function renderHints() {
         <div class="hint-main">
           <div><b class="hint-san">${uciToSan(entry.fen, c.uci)}</b>
             <span class="hint-label" style="color:${cls.color}">${cls.label}</span></div>
-          <div class="pv muted small">${pvToSan(entry.fen, c.line.pv)}</div>
+          <div class="why">${whyHtml(c.reasons)}</div>
+          <div class="pv muted small">Biến: ${pvToSan(entry.fen, c.line.pv)}</div>
         </div>
         <span class="score">${formatScore(c.line, true, turn)}</span>
       </li>`;

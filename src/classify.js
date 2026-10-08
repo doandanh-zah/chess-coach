@@ -13,7 +13,7 @@ export const CLASSES = {
   blunder: { label: 'Nước đi tệ', en: 'Blunder', glyph: '??', color: '#fa412d' },
 };
 
-const VALUE = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+export const VALUE = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
 
 /** Lichess win-probability model: centipawns (side-to-move POV) -> 0..100. */
 export function winPct(line) {

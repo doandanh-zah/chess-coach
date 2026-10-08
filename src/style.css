@@ -304,6 +304,39 @@ button.primary.active {
   font-variant-numeric: tabular-nums;
 }
 
+/* move explanations */
+.why {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0 2px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+.why > div {
+  position: relative;
+  padding-left: 14px;
+}
+.why > div::before {
+  content: '›';
+  position: absolute;
+  left: 2px;
+  color: var(--c, var(--accent));
+  font-weight: 800;
+}
+.why-block {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.why-title {
+  font-weight: 700;
+  font-size: 13px;
+}
+.hints .pv {
+  margin-top: 2px;
+}
+
 /* accuracy */
 .accuracy {
   display: flex;
