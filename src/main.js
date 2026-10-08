@@ -58,12 +58,18 @@ let liveInfo = null; // latest engine info for the current position
 let startFen = DEFAULT_POSITION;
 let editing = false;
 let editTool = null; // { role, color } | 'trash' | null (null = move pieces)
+let reviewing = false;
+let reviewIdx = 0; // ply shown on the board while reviewing
+let reviewRun = 0;
+let reviewProgress = null; // { done, total, depth } while a review analysis runs
 
 const analyst = new Engine(ENGINE_URL);
 const bot = new Engine(ENGINE_URL);
-const analyses = new Map(); // fen -> Promise<analysis | null>
+const analyses = new Map(); // `${depth}|${fen}` -> Promise<analysis | null>
 
 const current = () => history[history.length - 1];
+/** The position on the board: the reviewed ply, or the live position. */
+const shown = () => (reviewing ? history[reviewIdx] : current());
 const botColor = () => (settings.color === 'white' ? 'b' : 'w');
 const isBotTurn = () =>
   settings.mode === 'bot' && new Chess(current().fen).turn() === botColor();
@@ -93,10 +99,10 @@ function toDests(chess) {
 }
 
 function syncBoard() {
-  const entry = current();
+  const entry = shown();
   const chess = new Chess(entry.fen);
   const turn = chess.turn() === 'w' ? 'white' : 'black';
-  const canMove = !chess.isGameOver() && !isBotTurn();
+  const canMove = !reviewing && !chess.isGameOver() && !isBotTurn();
   ground.set({
     fen: entry.fen,
     orientation,
@@ -127,11 +133,16 @@ function badgeSvg(cls) {
 function drawShapes() {
   if (editing) return ground.setAutoShapes([]);
   const shapes = [];
-  const entry = current();
+  const entry = shown();
   if (entry.result) {
     shapes.push({ orig: entry.uci.slice(2, 4), customSvg: { html: badgeSvg(entry.result.cls) } });
+    // While reviewing, show what should have been played instead.
+    if (reviewing && !entry.result.isTop) {
+      const best = entry.result.bestUci;
+      shapes.push({ orig: best.slice(0, 2), dest: best.slice(2, 4), brush: 'best', modifiers: { lineWidth: 12 } });
+    }
   }
-  if (hintsVisible && entry.candidates && !isBotTurn()) {
+  if (!reviewing && hintsVisible && entry.candidates && !isBotTurn()) {
     entry.candidates.forEach((c, i) => {
       if (hoveredHint !== null && hoveredHint !== i) return;
       shapes.push({
@@ -146,14 +157,15 @@ function drawShapes() {
 }
 
 // ---------- analysis ----------
-function getAnalysis(fen) {
-  if (!analyses.has(fen)) {
+function getAnalysis(fen, depth = settings.depth) {
+  const key = `${depth}|${fen}`;
+  if (!analyses.has(key)) {
     const p = analyst
       .analyze(fen, {
-        depth: settings.depth,
+        depth,
         multipv: settings.multipv,
         onInfo: (info, f) => {
-          if (f === current().fen) {
+          if (!reviewing && f === current().fen) {
             liveInfo = info;
             renderEval();
             renderStatus();
@@ -161,12 +173,12 @@ function getAnalysis(fen) {
         },
       })
       .then((a) => {
-        if (!a) analyses.delete(fen); // dropped; allow a fresh request later
+        if (!a) analyses.delete(key); // dropped; allow a fresh request later
         return a;
       });
-    analyses.set(fen, p);
+    analyses.set(key, p);
   }
-  return analyses.get(fen);
+  return analyses.get(key);
 }
 
 function terminalOf(fen) {
@@ -194,18 +206,21 @@ async function analyzeCurrent() {
   renderAll();
 }
 
-async function gradeMove(entry) {
+async function gradeMove(entry, depth = settings.depth) {
   const idx = history.indexOf(entry);
   const prev = history[idx - 1];
-  const before = await getAnalysis(prev.fen);
+  const before = await getAnalysis(prev.fen, depth);
   if (!before || !history.includes(entry)) return;
   let after;
   const term = terminalOf(entry.fen);
   if (term) after = { terminal: term };
   else if (!before.lines.some((l) => l.pv[0] === entry.uci)) {
-    after = await getAnalysis(entry.fen);
+    after = await getAnalysis(entry.fen, depth);
     if (!after || !history.includes(entry)) return;
   }
+  // Never let a shallower grade overwrite a deeper one (e.g. after a deep review).
+  if ((entry.resultDepth ?? 0) > depth) return;
+  entry.resultDepth = depth;
   const r = classifyMove(prev.fen, entry.uci, before, after);
   r.isTop = ['brilliant', 'great', 'best', 'forced'].includes(r.cls) || r.bestUci === entry.uci;
 
@@ -262,7 +277,7 @@ async function botMove() {
   const entry = current();
   await bot.setOption('Skill Level', settings.skill);
   const a = await bot.analyze(entry.fen, { movetime: 300 + settings.skill * 40 });
-  if (!a || current() !== entry || !isBotTurn()) return;
+  if (!a || reviewing || editing || current() !== entry || !isBotTurn()) return;
   playMove(a.bestmove);
 }
 
@@ -327,10 +342,15 @@ function renderAll() {
   renderHints();
   renderMoves();
   renderAccuracy();
+  renderReview();
   drawShapes();
 }
 
 function renderStatus() {
+  if (reviewing) {
+    $('status').textContent = `Phân tích ván · nước ${reviewIdx}/${history.length - 1}`;
+    return;
+  }
   const chess = new Chess(current().fen);
   let text;
   if (chess.isCheckmate()) text = `Chiếu hết! ${chess.turn() === 'w' ? 'Đen' : 'Trắng'} thắng`;
@@ -354,7 +374,7 @@ function renderStatus() {
 function renderEval() {
   const bar = $('evalBar');
   bar.hidden = !settings.evalBar;
-  const entry = current();
+  const entry = shown();
   const chess = new Chess(entry.fen);
   const turn = chess.turn();
   let whiteWin = 50;
@@ -365,7 +385,7 @@ function renderEval() {
   } else if (chess.isGameOver()) {
     text = '½-½';
   } else {
-    const line = entry.analysis?.lines[0] ?? liveInfo;
+    const line = entry.analysis?.lines[0] ?? (reviewing ? null : liveInfo);
     if (line) {
       const w = winPct(line);
       whiteWin = turn === 'w' ? w : 100 - w;
@@ -409,8 +429,12 @@ function pvToSan(fen, pv, max = 6) {
 
 function renderFeedback() {
   const el = $('feedback');
-  const idx = history.length - 1;
-  const entry = current();
+  const entry = shown();
+  const idx = history.indexOf(entry);
+  if (idx === 0 && reviewing) {
+    el.innerHTML = `<div class="muted">Thế cờ ban đầu. Bấm ▶ (hoặc phím →) để xem từng nước.</div>`;
+    return;
+  }
   if (idx === 0) {
     el.innerHTML = `<div class="muted">Đi một nước để được chấm điểm. Bấm vào một nước gợi ý để đi luôn; bấm <b>✏️ Xếp cờ</b> để tự tạo thế cờ.</div>`;
     return;
@@ -472,7 +496,7 @@ function renderHints() {
   const card = $('hintCard');
   const entry = current();
   const over = new Chess(entry.fen).isGameOver();
-  card.hidden = !hintsVisible || over || isBotTurn();
+  card.hidden = reviewing || !hintsVisible || over || isBotTurn();
   $('btnHint').classList.toggle('active', hintsVisible);
   if (card.hidden) return;
   const list = $('hints');
@@ -502,10 +526,14 @@ function renderHints() {
 
 function renderMoves() {
   const el = $('moves');
-  const cell = (e) =>
-    e
-      ? `<span class="mv">${e.san}${e.result ? badgeHtml(e.result.cls) : '<span class="pending">…</span>'}</span>`
-      : '<span class="muted">…</span>';
+  const cell = (e) => {
+    if (!e) return '<span class="muted">…</span>';
+    const ply = history.indexOf(e);
+    const cur = reviewing && ply === reviewIdx ? ' cur' : '';
+    return `<span class="mv${cur}" data-ply="${ply}" title="Xem lại nước này">${e.san}${
+      e.result ? badgeHtml(e.result.cls) : '<span class="pending">…</span>'
+    }</span>`;
+  };
   // Group plies into numbered rows; a game set up with Black to move starts with "1. …".
   const rows = [];
   for (const e of history.slice(1)) {
@@ -517,15 +545,20 @@ function renderMoves() {
     rows
       .map((r) => `<div class="row"><span class="no">${r.no}.</span>${cell(r.w)}${r.b ? cell(r.b) : r.w ? '<span></span>' : cell(null)}</div>`)
       .join('') || '<div class="muted small">Chưa có nước đi.</div>';
-  el.scrollTop = el.scrollHeight;
+  const cur = el.querySelector('.mv.cur');
+  if (cur) el.scrollTop = cur.offsetTop - el.offsetTop - el.clientHeight / 2;
+  else if (!reviewing) el.scrollTop = el.scrollHeight;
+}
+
+function accuracyOf(color) {
+  const moves = history.filter((h) => h.color === color && h.result && h.result.cls !== 'forced');
+  if (!moves.length) return null;
+  return moves.reduce((s, h) => s + moveAccuracy(h.result.loss), 0) / moves.length;
 }
 
 function renderAccuracy() {
   for (const color of ['w', 'b']) {
-    const moves = history.filter((h) => h.color === color && h.result && h.result.cls !== 'forced');
-    const acc = moves.length
-      ? moves.reduce((s, h) => s + moveAccuracy(h.result.loss), 0) / moves.length
-      : null;
+    const acc = accuracyOf(color);
     $(color === 'w' ? 'accW' : 'accB').textContent = acc === null ? '–' : `${acc.toFixed(1)}%`;
   }
 }
@@ -572,6 +605,15 @@ $('hints').addEventListener('click', (e) => {
 
 document.addEventListener('keydown', (e) => {
   if (e.target.closest('input, select, textarea') || editing) return;
+  if (reviewing) {
+    const keys = { ArrowLeft: reviewIdx - 1, ArrowRight: reviewIdx + 1, Home: 0, End: history.length - 1 };
+    if (e.key in keys) {
+      e.preventDefault();
+      gotoPly(keys[e.key]);
+    } else if (e.key === 'Escape') exitReview();
+    else if (e.key === 'f' || e.key === 'F') flip();
+    return;
+  }
   if (e.key === 'h' || e.key === 'H') toggleHints();
   else if (e.key === 'ArrowLeft') undo();
   else if (e.key === 'f' || e.key === 'F') flip();
@@ -616,6 +658,7 @@ function bindSettings() {
       delete h.analysis;
       delete h.candidates;
       delete h.result;
+      delete h.resultDepth;
     }
     renderAll();
     analyzeCurrent();
@@ -819,6 +862,229 @@ $('editFen').addEventListener('change', () => {
   if (turn === 'w' || turn === 'b') $('editTurn').value = turn;
   syncFenInput();
 });
+
+// ---------- game review ----------
+const REVIEW_CLASSES = ['brilliant', 'great', 'best', 'excellent', 'good', 'inaccuracy', 'mistake', 'blunder'];
+const GRAPH_MARKS = new Set(['brilliant', 'great', 'mistake', 'blunder']);
+
+function enterReview(ply = history.length - 1) {
+  if (editing) return;
+  bot.stopAll();
+  reviewing = true;
+  reviewIdx = Math.max(0, Math.min(ply, history.length - 1));
+  document.body.classList.add('reviewing');
+  $('pgnError').textContent = '';
+  syncBoard();
+  renderAll();
+  if (history.length > 1) runReview(settings.depth);
+}
+
+function exitReview() {
+  reviewing = false;
+  document.body.classList.remove('reviewing');
+  hoveredHint = null;
+  hintsVisible = settings.autoHint;
+  syncBoard();
+  renderAll();
+  analyzeCurrent();
+  if (isBotTurn() && !new Chess(current().fen).isGameOver()) botMove();
+}
+
+function continueFromHere() {
+  history = history.slice(0, reviewIdx + 1);
+  exitReview();
+}
+
+function gotoPly(ply) {
+  const next = Math.max(0, Math.min(ply, history.length - 1));
+  if (next === reviewIdx) return;
+  reviewIdx = next;
+  syncBoard();
+  renderAll();
+}
+
+/** Analyse every position of the game at `depth`, then (re)grade every move. */
+async function runReview(depth) {
+  const run = ++reviewRun;
+  const items = history.slice();
+  let done = 0;
+  reviewProgress = { done, total: items.length, depth };
+  renderReview();
+  await Promise.all(
+    items.map(async (h) => {
+      if (!terminalOf(h.fen)) {
+        const a = await getAnalysis(h.fen, depth);
+        if (a && (!h.analysis || a.depth >= h.analysis.depth)) h.analysis = a;
+      }
+      if (run !== reviewRun) return;
+      reviewProgress.done = ++done;
+      renderReview();
+      if (h === shown()) renderEval();
+    }),
+  );
+  await Promise.all(items.slice(1).map((h) => gradeMove(h, depth)));
+  if (run !== reviewRun) return;
+  reviewProgress = null;
+  renderAll();
+}
+
+function whiteWinAt(h) {
+  const term = terminalOf(h.fen);
+  const turn = h.fen.split(' ')[1];
+  if (term === 'mate') return turn === 'w' ? 0 : 100;
+  if (term === 'draw') return 50;
+  const line = h.analysis?.lines[0];
+  if (!line) return null;
+  const w = winPct(line);
+  return turn === 'w' ? w : 100 - w;
+}
+
+function renderGraph() {
+  const W = 400;
+  const H = 100;
+  const n = history.length - 1;
+  const x = (i) => (n ? (i / n) * W : W / 2);
+  let last = 50;
+  const pts = history.map((h, i) => {
+    const v = whiteWinAt(h);
+    if (v !== null) last = v;
+    return [x(i), H - (last / 100) * H];
+  });
+  const area = `M0,${H} L0,${pts[0][1]} ${pts.map(([px, py]) => `L${px.toFixed(1)},${py.toFixed(1)}`).join(' ')} L${W},${pts[pts.length - 1][1]} L${W},${H} Z`;
+  const marks = history
+    .map((h, i) => (h.result && GRAPH_MARKS.has(h.result.cls) ? { i, cls: h.result.cls } : null))
+    .filter(Boolean)
+    .map(({ i, cls }) => `<circle cx="${x(i)}" cy="${pts[i][1]}" r="4" fill="${CLASSES[cls].color}" stroke="#1f1d1b" stroke-width="1.5"/>`)
+    .join('');
+  $('evalGraph').innerHTML = `
+    <rect width="${W}" height="${H}" fill="#403d39"/>
+    <path d="${area}" fill="#f0eee9"/>
+    <line x1="0" x2="${W}" y1="${H / 2}" y2="${H / 2}" stroke="#8a8784" stroke-dasharray="3 3" stroke-width="1"/>
+    <line x1="${x(reviewIdx)}" x2="${x(reviewIdx)}" y1="0" y2="${H}" stroke="#81b64c" stroke-width="2"/>
+    ${marks}`;
+}
+
+function renderSummary() {
+  const count = (cls, color) => history.filter((h) => h.color === color && h.result?.cls === cls).length;
+  const acc = (c) => {
+    const a = accuracyOf(c);
+    return a === null ? '–' : a.toFixed(1);
+  };
+  const rows = REVIEW_CLASSES.map((cls) => {
+    const c = CLASSES[cls];
+    const td = (color) => {
+      const k = count(cls, color);
+      return `<td class="num${k ? ' jump' : ''}" style="color:${k ? c.color : 'var(--muted)'}" data-cls="${cls}" data-color="${color}">${k}</td>`;
+    };
+    return `<tr><td>${badgeHtml(cls)} ${c.label}</td>${td('w')}${td('b')}</tr>`;
+  }).join('');
+  $('reviewSummary').innerHTML = `
+    <thead><tr><th></th><th>Trắng</th><th>Đen</th></tr></thead>
+    <tbody>
+      <tr class="acc-row"><td>Độ chính xác</td><td class="num">${acc('w')}</td><td class="num">${acc('b')}</td></tr>
+      ${rows}
+    </tbody>`;
+}
+
+function renderReview() {
+  if (!reviewing) return;
+  const p = reviewProgress;
+  $('reviewProgress').hidden = !p;
+  if (p) {
+    $('reviewBar').style.width = `${(p.done / p.total) * 100}%`;
+    $('reviewProgressText').textContent =
+      p.done < p.total ? `Đang phân tích ${p.done}/${p.total} thế cờ (độ sâu ${p.depth})…` : 'Đang chấm điểm các nước…';
+  }
+  const entry = shown();
+  $('reviewPly').textContent = reviewIdx === 0 ? 'Bắt đầu' : `${moveNo(entry)} ${entry.san}`;
+  $('revFirst').disabled = $('revPrev').disabled = reviewIdx === 0;
+  $('revLast').disabled = $('revNext').disabled = reviewIdx === history.length - 1;
+  const deeper = Math.min(settings.depth + 4, 24);
+  $('reviewDeep').textContent = `🔬 Phân tích sâu hơn (độ sâu ${deeper})`;
+  $('reviewDeep').disabled = !!p || history.length < 2;
+  $('reviewEmpty').hidden = history.length > 1;
+  $('reviewBody').hidden = history.length < 2;
+  if (history.length > 1) {
+    renderGraph();
+    renderSummary();
+  }
+}
+
+function loadPgn(text) {
+  const game = new Chess();
+  try {
+    game.loadPgn(text.trim());
+  } catch (err) {
+    return `Không đọc được PGN: ${err.message}`;
+  }
+  const moves = game.history({ verbose: true });
+  if (!moves.length) return 'PGN không có nước đi nào.';
+  bot.stopAll();
+  startFen = moves[0].before;
+  history = [{ fen: startFen, uci: null, san: null }];
+  for (const m of moves) {
+    history.push({
+      fen: m.after,
+      uci: m.from + m.to + (m.promotion ?? ''),
+      san: m.san,
+      color: m.color,
+      no: +m.before.split(' ')[5],
+    });
+  }
+  analyst.prune((fen) => history.some((h) => h.fen === fen));
+  reviewing = false;
+  enterReview(0);
+  return null;
+}
+
+function exportPgn() {
+  const game = new Chess(history[0].fen);
+  for (const h of history.slice(1)) game.move(uciToMove(h.uci));
+  return game.pgn();
+}
+
+$('btnReview').onclick = () => enterReview();
+$('reviewExit').onclick = exitReview;
+$('reviewContinue').onclick = continueFromHere;
+$('reviewDeep').onclick = () => runReview(Math.min(settings.depth + 4, 24));
+$('revFirst').onclick = () => gotoPly(0);
+$('revPrev').onclick = () => gotoPly(reviewIdx - 1);
+$('revNext').onclick = () => gotoPly(reviewIdx + 1);
+$('revLast').onclick = () => gotoPly(history.length - 1);
+$('revFlip').onclick = flip;
+$('evalGraph').addEventListener('click', (e) => {
+  const r = e.currentTarget.getBoundingClientRect();
+  gotoPly(Math.round(((e.clientX - r.left) / r.width) * (history.length - 1)));
+});
+$('reviewSummary').addEventListener('click', (e) => {
+  const td = e.target.closest('td.jump');
+  if (!td) return;
+  // Jump to the next move of this class by this side (wrapping around).
+  const plies = history
+    .map((h, i) => (h.color === td.dataset.color && h.result?.cls === td.dataset.cls ? i : -1))
+    .filter((i) => i > 0);
+  gotoPly(plies.find((i) => i > reviewIdx) ?? plies[0]);
+});
+$('moves').addEventListener('click', (e) => {
+  const mv = e.target.closest('[data-ply]');
+  if (!mv || editing) return;
+  if (reviewing) gotoPly(+mv.dataset.ply);
+  else enterReview(+mv.dataset.ply);
+});
+$('pgnLoad').onclick = () => {
+  const err = loadPgn($('pgnText').value);
+  $('pgnError').textContent = err ?? '';
+};
+$('pgnCopy').onclick = async () => {
+  const pgn = exportPgn();
+  try {
+    await navigator.clipboard.writeText(pgn);
+    $('pgnCopy').textContent = '✓ Đã sao chép';
+    setTimeout(() => ($('pgnCopy').textContent = 'Sao chép PGN ván này'), 1500);
+  } catch {
+    $('pgnText').value = pgn;
+  }
+};
 
 bindSettings();
 restart();

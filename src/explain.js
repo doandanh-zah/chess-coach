@@ -196,7 +196,7 @@ export function explainMove(fen, line, { max = 3 } = {}) {
     const pressured = targetsOf(after, to).find((t) => t.type !== 'p' && t.type !== 'k');
     if (pressured) add(20, `Gây áp lực lên ${piece(pressured, pressured.square)}`);
   }
-  if (!after.isGameOver()) {
+  if (!after.isGameOver() && !after.inCheck()) {
     const mateIn1 = mateThreat(after);
     if (mateIn1) add(82, `Đe dọa chiếu hết bằng ${mateIn1}`);
   }

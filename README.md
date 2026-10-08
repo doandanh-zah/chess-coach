@@ -19,6 +19,7 @@ Build tĩnh: `npm run build` → thư mục `dist/` (host ở đâu cũng đư�
 - Mỗi nước đi được chấm: Thiên tài `!!`, Tuyệt vời `!`, Tốt nhất `★`, Xuất sắc, Tốt, Bắt buộc, Thiếu chính xác `?!`, Sai lầm `?`, Nước đi tệ `??`.
 - **Gợi ý luôn hiện**: top 2–5 nước kèm nhãn, điểm, biến chính và mũi tên trên bàn; bấm để đi. Nút 💡 / phím `H` để tạm ẩn; tắt hẳn trong Cài đặt.
 - **Giải thích vì sao** (`src/explain.js`): mỗi nước gợi ý kèm lý do — chiếu hết / đe dọa chiếu hết, chĩa đôi, ghim, xiên, mở đường tấn công, ăn quân không được bảo vệ, thí quân, phong cấp, Tốt thông, phát triển quân, chiếm trung tâm, nhập thành, cột mở, lợi vật chất theo biến chính. Nước bạn vừa đi chưa tốt thì app chỉ ra cách đối phương trừng phạt và vì sao nước tốt nhất hay hơn.
+- **📊 Phân tích ván**: xem lại từng nước (nút ⏮ ◀ ▶ ⏭, phím ←/→/Home/End, hoặc bấm vào biên bản), đồ thị lợi thế (bấm để nhảy tới nước), bảng thống kê nhãn và độ chính xác từng bên, mũi tên nước nên đi thay thế, phân tích sâu hơn (+4 độ sâu), *Chơi tiếp từ đây*, nhập/xuất **PGN** để phân tích ván đã chơi xong ở nơi khác.
 - **✏️ Xếp cờ**: kéo/thả quân từ bảng vào bàn (hoặc chọn quân rồi bấm ô, 🗑 để xóa, kéo ra ngoài bàn để bỏ), chọn bên đi tiếp, hoặc dán FEN. Bấm *Xong* để phân tích và chơi tiếp từ thế đó. Quyền nhập thành được suy ra từ vị trí Vua/Xe.
 - Thanh đánh giá, độ chính xác từng bên, đi lại (`←`), lật bàn (`F`).
 

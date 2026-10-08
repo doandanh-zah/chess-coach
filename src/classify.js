@@ -111,7 +111,9 @@ export function classifyMove(fen, uci, before, after) {
 
   const isBest = uci === top.pv[0] || loss < 0.5;
 
-  if (loss <= 2 && winBefore < 97 && winAfter >= 45 && sacrificedMaterial(fen, uci) >= 2) {
+  // A sacrifice that forces mate is brilliant even if the game was already won.
+  const forcesMate = own?.mate > 0 || after?.lines?.[0]?.mate < 0;
+  if (loss <= 2 && (winBefore < 97 || forcesMate) && winAfter >= 45 && sacrificedMaterial(fen, uci) >= 2) {
     return { ...result, cls: 'brilliant' };
   }
   if (isBest && lines.length > 1 && winAfter >= 25) {

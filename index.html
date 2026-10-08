@@ -24,11 +24,12 @@
       </section>
 
       <aside class="panel">
-        <div class="controls play-only">
+        <div class="controls play-only review-hide">
           <button id="btnHint" class="primary" title="Ẩn/hiện gợi ý (phím H)">💡 Gợi ý</button>
           <button id="btnUndo" title="Phím ←">↶ Đi lại</button>
           <button id="btnFlip" title="Phím F">⇅ Lật</button>
           <button id="btnEdit" title="Tự xếp quân để tạo thế cờ">✏️ Xếp cờ</button>
+          <button id="btnReview" title="Phân tích lại toàn bộ ván, nhập/xuất PGN">📊 Phân tích</button>
           <button id="btnNew">⟲ Ván mới</button>
         </div>
 
@@ -60,18 +61,61 @@
           </div>
         </div>
 
+        <div class="card review" id="review">
+          <div class="review-head">
+            <div class="card-title">📊 Phân tích ván</div>
+            <button id="reviewExit" class="ghost" title="Thoát (Esc)">✕ Thoát</button>
+          </div>
+
+          <div id="reviewEmpty" class="muted small">
+            Ván hiện tại chưa có nước đi. Dán PGN bên dưới để phân tích một ván đã chơi.
+          </div>
+
+          <div id="reviewBody">
+            <div class="progress" id="reviewProgress" hidden>
+              <div class="bar"><div id="reviewBar"></div></div>
+              <span class="muted small" id="reviewProgressText"></span>
+            </div>
+            <svg id="evalGraph" class="eval-graph" viewBox="0 0 400 100" role="img" aria-label="Đồ thị lợi thế theo từng nước"></svg>
+            <div class="review-nav">
+              <button id="revFirst" title="Về đầu (Home)">⏮</button>
+              <button id="revPrev" title="Nước trước (←)">◀</button>
+              <span id="reviewPly" class="ply"></span>
+              <button id="revNext" title="Nước sau (→)">▶</button>
+              <button id="revLast" title="Về cuối (End)">⏭</button>
+              <button id="revFlip" title="Lật bàn (F)">⇅</button>
+            </div>
+            <table class="summary" id="reviewSummary"></table>
+            <p class="muted small">Bấm vào con số để nhảy tới nước đó. Mũi tên xanh trên bàn là nước nên đi thay thế.</p>
+            <div class="review-actions">
+              <button id="reviewDeep">🔬 Phân tích sâu hơn</button>
+              <button id="reviewContinue" class="primary">▶ Chơi tiếp từ đây</button>
+            </div>
+          </div>
+
+          <details class="pgn">
+            <summary>📋 Nhập / xuất PGN</summary>
+            <textarea id="pgnText" rows="5" spellcheck="false" placeholder="Dán PGN của ván cờ (ví dụ tải về từ Lichess / Chess.com sau khi ván kết thúc)…"></textarea>
+            <div class="pgn-actions">
+              <button id="pgnLoad" class="primary">Tải ván & phân tích</button>
+              <button id="pgnCopy">Sao chép PGN ván này</button>
+            </div>
+            <div class="error" id="pgnError"></div>
+          </details>
+        </div>
+
         <div class="card feedback play-only" id="feedback">
           <div class="muted">Đi một nước để được chấm điểm.</div>
         </div>
 
-        <div class="card play-only" id="hintCard" hidden>
+        <div class="card play-only review-hide" id="hintCard" hidden>
           <div class="card-title">
             Nước đi gợi ý <span class="muted small" id="hintDepth"></span>
           </div>
           <ol class="hints" id="hints"></ol>
         </div>
 
-        <div class="card play-only">
+        <div class="card play-only review-hide">
           <div class="card-title">Độ chính xác</div>
           <div class="accuracy">
             <div><span class="dot white"></span>Trắng <b id="accW">–</b></div>
@@ -84,7 +128,7 @@
           <div class="moves" id="moves"></div>
         </div>
 
-        <details class="card settings play-only">
+        <details class="card settings play-only review-hide">
           <summary class="card-title">⚙️ Cài đặt</summary>
           <label>Chế độ
             <select id="setMode">
