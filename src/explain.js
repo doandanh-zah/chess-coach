@@ -137,13 +137,27 @@ function pvMaterialGain(fen, pv) {
   return best ?? 0;
 }
 
+const CENTER_OUTPOSTS = new Set(['c4', 'd4', 'e4', 'f4', 'c5', 'd5', 'e5', 'f5']);
+const centerDist = (sq) => Math.max(Math.abs(FILES.indexOf(sq[0]) - 3.5), Math.abs(+sq[1] - 4.5));
+
+/** Squares a piece of `color` could reach if it were its turn (pseudo-legal enough for ideas). */
+function movesFor(chess, color) {
+  const [board, , castling] = chess.fen().split(' ');
+  try {
+    return new Chess(`${board} ${color} ${castling} - 0 1`).moves({ verbose: true });
+  } catch {
+    return [];
+  }
+}
+
 /**
+ * Analyse one move: why it is played (reasons, strongest first) and which
+ * notable events happen (tags, used for the fun commentary).
  * @param {string} fen position before the move
  * @param {{pv: string[], cp?: number, mate?: number}} line engine line starting with the move
- * @param {{max?: number}} opts
- * @returns {string[]} reasons, most important first
+ * @param {{max?: number, shallow?: boolean}} opts shallow: skip look-ahead ideas (used for PV steps)
  */
-export function explainMove(fen, line, { max = 3 } = {}) {
+export function describeMove(fen, line, { max = 3, shallow = false } = {}) {
   const uci = line.pv[0];
   const before = new Chess(fen);
   const me = before.turn();
@@ -153,55 +167,104 @@ export function explainMove(fen, line, { max = 3 } = {}) {
   try {
     move = after.move(uciToMove(uci));
   } catch {
-    return [];
+    return { reasons: [], tags: new Set(), san: uci };
   }
   const { from, to } = move;
   const moved = after.get(to);
   const reasons = [];
+  const tags = new Set();
   const add = (w, text) => reasons.push({ w, text });
+  const myMat = material(before, me) - material(before, opp);
 
-  // Forced mate
-  if (after.isCheckmate()) add(100, 'Chiếu hết — kết thúc ván cờ!');
-  else if (line.mate > 0) add(95, `Mở ra đòn chiếu hết sau ${line.mate} nước nếu đi chính xác`);
-
-  if (move.isKingsideCastle() || move.isQueensideCastle())
-    add(50, 'Nhập thành: đưa Vua vào chỗ an toàn và đưa Xe vào trận');
-  if (move.promotion) add(85, `Phong cấp Tốt thành ${NAME[move.promotion]}`);
-
-  // Captures
-  if (move.captured) {
-    const cap = { type: move.captured };
-    const loose = !before.attackers(to, opp).length || !after.attackers(to, opp).length;
-    if (move.isEnPassant()) add(40, 'Bắt Tốt qua đường');
-    else if (loose) add(80, `Ăn không ${NAME[cap.type]} ở ${to} (quân không được bảo vệ)`);
-    else if (VALUE[cap.type] > VALUE[move.piece]) add(75, `Dùng ${NAME[move.piece]} ăn ${NAME[cap.type]} — đổi quân có lợi`);
-    else if (VALUE[cap.type] === VALUE[move.piece]) add(35, `Đổi quân: ${NAME[move.piece]} lấy ${NAME[cap.type]}`);
+  // --- Game enders
+  if (after.isCheckmate()) {
+    add(100, 'Chiếu hết — kết thúc ván cờ!');
+    tags.add('mate');
+    const kSq = pieces(after, opp).find((p) => p.type === 'k').square;
+    const ring = [];
+    for (let df = -1; df <= 1; df++)
+      for (let dr = -1; dr <= 1; dr++) {
+        const f = FILES.indexOf(kSq[0]) + df;
+        const r = +kSq[1] + dr;
+        if ((df || dr) && f >= 0 && f < 8 && r >= 1 && r <= 8) ring.push(FILES[f] + r);
+      }
+    if (move.piece === 'n' && ring.every((q) => after.get(q)?.color === opp)) tags.add('smothered');
+    if (['1', '8'].includes(kSq[1]) && 'rq'.includes(move.piece) && to[1] === kSq[1]) tags.add('backRank');
+    if (move.piece === 'p') tags.add('pawnMate');
+    if (move.isKingsideCastle() || move.isQueensideCastle()) tags.add('castleMate');
+    if (before.moveNumber() <= 4 && move.piece === 'q') tags.add('scholarMate');
+  } else if (after.isStalemate()) {
+    tags.add('stalemate');
+  } else if (line.mate > 0) {
+    add(95, `Mở ra đòn chiếu hết sau ${line.mate} nước nếu đi chính xác`);
   }
 
-  // Sacrifice
-  const sac = sacrificedMaterial(fen, uci);
-  if (sac >= 2) add(78, `Thí quân (bỏ ${sac} điểm vật chất) để giành thế tấn công`);
+  if (move.isKingsideCastle() || move.isQueensideCastle()) {
+    add(50, 'Nhập thành: đưa Vua vào chỗ an toàn và đưa Xe vào trận');
+    tags.add(move.isKingsideCastle() ? 'castleShort' : 'castleLong');
+  }
+  if (move.promotion) {
+    add(85, `Phong cấp Tốt thành ${NAME[move.promotion]}`);
+    tags.add(move.promotion === 'q' ? 'promoteQueen' : 'underpromote');
+  }
 
-  // Check / threats / fork from the moved piece
-  if (after.inCheck() && !after.isCheckmate()) add(45, 'Chiếu Vua, buộc đối phương phải đối phó');
+  // --- Captures
+  if (move.captured) {
+    const loose = !before.attackers(to, opp).length || !after.attackers(to, opp).length;
+    if (move.isEnPassant()) {
+      add(40, 'Bắt Tốt qua đường');
+      tags.add('enPassant');
+    } else if (loose) {
+      add(80, `Ăn không ${NAME[move.captured]} ở ${to} (quân không được bảo vệ)`);
+      tags.add(move.captured === 'q' ? 'freeQueen' : 'freePiece');
+    } else if (VALUE[move.captured] > VALUE[move.piece]) {
+      add(75, `Dùng ${NAME[move.piece]} ăn ${NAME[move.captured]} — đổi quân có lợi`);
+    } else if (VALUE[move.captured] === VALUE[move.piece]) {
+      if (move.piece === 'q') tags.add('queenTrade');
+      if (myMat >= 2) add(38, 'Đang hơn quân nên chủ động đổi quân để đơn giản hóa thế cờ');
+      else add(35, `Đổi quân: ${NAME[move.piece]} lấy ${NAME[move.captured]}`);
+    }
+  }
+
+  // --- Sacrifice
+  const sac = sacrificedMaterial(fen, uci);
+  if (sac >= 2) {
+    add(78, `Thí quân (bỏ ${sac} điểm vật chất) để giành thế tấn công`);
+    tags.add(sac >= 8 ? 'queenSac' : 'sacrifice');
+  }
+
+  // --- Checks, threats, forks
+  if (after.inCheck() && !after.isCheckmate()) {
+    add(45, 'Chiếu Vua, buộc đối phương phải đối phó');
+    tags.add('check');
+  }
   const threats = targetsOf(after, to).filter(
     (t) => t.type === 'k' || VALUE[t.type] > VALUE[moved.type] || (isHanging(after, t.square) && VALUE[t.type] >= 3),
   );
   if (threats.length >= 2) {
     const names = threats.map((t) => (t.type === 'k' ? 'Vua' : piece(t, t.square))).join(' và ');
     add(88, `Đòn chĩa đôi: ${NAME[moved.type]} tấn công cùng lúc ${names}`);
+    tags.add(moved.type === 'n' ? 'knightFork' : moved.type === 'p' ? 'pawnFork' : 'fork');
+    if (threats.some((t) => t.type === 'k') && threats.some((t) => t.type === 'q')) tags.add('royalFork');
   } else if (threats.length === 1 && threats[0].type !== 'k') {
     add(60, `Đe dọa ăn ${piece(threats[0], threats[0].square)}`);
+    if (threats[0].type === 'q') tags.add('hitQueen');
+  } else if (targetsOf(after, to).some((t) => t.type === 'p' && isHanging(after, t.square))) {
+    const pawn = targetsOf(after, to).find((t) => t.type === 'p' && isHanging(after, t.square));
+    add(33, `Tấn công Tốt ở ${pawn.square} đang không được bảo vệ`);
   } else if (lineTactics(after, to).length === 0) {
     const pressured = targetsOf(after, to).find((t) => t.type !== 'p' && t.type !== 'k');
     if (pressured) add(20, `Gây áp lực lên ${piece(pressured, pressured.square)}`);
   }
   if (!after.isGameOver() && !after.inCheck()) {
     const mateIn1 = mateThreat(after);
-    if (mateIn1) add(82, `Đe dọa chiếu hết bằng ${mateIn1}`);
+    if (mateIn1) {
+      add(82, `Đe dọa chiếu hết bằng ${mateIn1}`);
+      tags.add('mateThreat');
+    }
   }
 
-  // Discovered attacks: other pieces that now hit something valuable
+  // --- Discovered attacks
   for (const t of pieces(after, opp)) {
     if (t.type === 'p') continue;
     const newHits = after
@@ -210,13 +273,22 @@ export function explainMove(fen, line, { max = 3 } = {}) {
     if (newHits.length && (t.type === 'k' || isHanging(after, t.square))) {
       const by = after.get(newHits[0]);
       add(t.type === 'k' ? 72 : 62, `Mở đường cho ${NAME[by.type]} ${t.type === 'k' ? 'chiếu Vua' : `tấn công ${piece(t, t.square)}`}`);
+      tags.add(t.type === 'k' ? 'discoveredCheck' : 'discovered');
       break;
     }
   }
 
-  for (const t of lineTactics(after, to)) add(t.w, t.text);
+  for (const t of lineTactics(after, to)) {
+    add(t.w, t.text);
+    tags.add(t.text.startsWith('Ghim') ? (t.w >= 70 ? 'pinKing' : 'pin') : 'skewer');
+  }
 
-  // Safety: rescuing the moved piece or another one
+  // --- Defence
+  const oppMateBefore = mateThreat(new Chess(`${before.fen().split(' ')[0]} ${me} - - 0 1`));
+  if (oppMateBefore && !after.isGameOver() && !mateThreat(new Chess(after.fen().replace(/ [wb] /, ` ${me} `)))) {
+    add(86, `Chặn đòn chiếu hết ${oppMateBefore} của đối phương`);
+    tags.add('stopMate');
+  }
   if (isHanging(before, from) && !isHanging(after, to)) add(58, `Đưa ${NAME[moved.type]} thoát khỏi chỗ bị tấn công`);
   for (const p of pieces(before, me)) {
     if (p.square === from || !isHanging(before, p.square)) continue;
@@ -226,44 +298,130 @@ export function explainMove(fen, line, { max = 3 } = {}) {
     }
   }
 
-  // Strategic ideas
+  // --- Strategy
   const backRank = me === 'w' ? '1' : '8';
-  if (before.moveNumber() <= 12 && 'nb'.includes(move.piece) && from[1] === backRank)
-    add(30, `Phát triển ${NAME[move.piece]} ra trận`);
+  const rel = (sq) => (me === 'w' ? +sq[1] : 9 - +sq[1]); // rank from the mover's side
+  const opening = before.moveNumber() <= 12;
+  const heavy = pieces(before).filter((p) => 'qrbn'.includes(p.type)).reduce((s, p) => s + VALUE[p.type], 0);
+  if (opening && 'nb'.includes(move.piece) && from[1] === backRank) add(30, `Phát triển ${NAME[move.piece]} ra trận`);
   if (move.piece === 'p' && ['d4', 'e4', 'd5', 'e5'].includes(to)) add(28, 'Chiếm trung tâm bằng Tốt');
-  if (move.piece === 'p' && isPassed(after, to, me)) {
-    const rank = +to[1];
-    const close = me === 'w' ? rank >= 6 : rank <= 3;
-    add(close ? 70 : 40, close ? 'Đẩy Tốt thông, sắp phong cấp' : 'Đẩy Tốt thông tiến lên');
+  if (move.piece === 'n' && CENTER_OUTPOSTS.has(to) && rel(to) >= 4) add(26, 'Đưa Mã vào ô mạnh ở trung tâm, khó bị đuổi');
+  if (move.piece === 'b' && ['g2', 'b2', 'g7', 'b7'].includes(to)) add(26, 'Đưa Tượng lên đường chéo dài (fianchetto)');
+  if (move.piece === 'r' && rel(to) === 7) add(45, 'Xe xuống hàng 7: ăn Tốt và dồn ép Vua đối phương');
+  if ('rq'.includes(move.piece)) {
+    const partner = pieces(after, me).find(
+      (p) => p.square !== to && p.square[0] === to[0] && 'rq'.includes(p.type),
+    );
+    if (partner) {
+      const lo = Math.min(+to[1], +partner.square[1]);
+      const hi = Math.max(+to[1], +partner.square[1]);
+      let clear = true;
+      for (let r = lo + 1; r < hi; r++) if (after.get(to[0] + r)) clear = false;
+      if (clear) add(34, `Chồng ${NAME[move.piece]} với ${NAME[partner.type]} trên cột ${to[0]}`);
+    }
   }
   if (move.piece === 'r' && !pieces(after, me).some((p) => p.type === 'p' && p.square[0] === to[0]))
     add(32, `Đưa Xe vào cột ${to[0]} mở`);
+  if (move.piece === 'p') {
+    if (isPassed(after, to, me)) {
+      const close = rel(to) >= 6;
+      add(close ? 70 : 40, close ? 'Đẩy Tốt thông, sắp phong cấp' : 'Đẩy Tốt thông tiến lên');
+    }
+    const hitsPawn = targetsOf(after, to).some((t) => t.type === 'p');
+    if (hitsPawn && !move.captured) add(30, 'Đột phá Tốt: thách đổi để mở cột, mở đường cho quân');
+    const king = pieces(before, me).find((p) => p.type === 'k');
+    if ('fgh'.includes(from[0]) && rel(from) === 2 && king.square[1] === backRank && 'fgh'.includes(king.square[0]))
+      add(28, 'Tạo ô thở cho Vua, tránh bị chiếu hết hàng cuối');
+    // Prophylaxis: the pawn now guards a square an enemy minor piece wanted.
+    const guarded = targetsOfSquares(after, to);
+    const intruder = movesFor(before, opp).find((m) => 'nb'.includes(m.piece) && guarded.includes(m.to));
+    if (intruder) add(29, `Phòng ngừa: không cho ${NAME[intruder.piece]} đối phương nhảy vào ${intruder.to}`);
+  }
+  if (move.piece === 'k' && !move.isKingsideCastle() && !move.isQueensideCastle()) {
+    if (heavy <= 26 && centerDist(to) < centerDist(from)) add(30, 'Tàn cuộc: đưa Vua ra trung tâm làm quân chiến đấu');
+    else if (heavy > 26 && rel(to) >= 3 && pieces(before, opp).some((p) => p.type === 'q')) tags.add('kingWalk');
+  }
+  if (move.piece === 'q' && before.moveNumber() <= 4 && rel(to) >= 4) tags.add('earlyQueen');
+  const fullBoard = pieces(before).length >= 30; // still the opening of a normal game
+  if (fullBoard && before.moveNumber() <= 3 && move.piece === 'k' && !move.isKingsideCastle() && !move.isQueensideCastle())
+    tags.add('bongcloud');
 
-  // Where the engine line leads
-  const gain = pvMaterialGain(fen, line.pv);
+  // --- Where the engine line leads
+  const gain = shallow ? 0 : pvMaterialGain(fen, line.pv);
   if (gain >= 2 && !(line.mate > 0)) add(68, `Theo biến chính, ${SIDE[me]} lời thêm ${gain} điểm vật chất`);
+
+  // --- Look ahead: what this move prepares (our follow-up in the engine line)
+  if (!shallow && line.pv.length > 2 && !after.isGameOver()) {
+    const sim = new Chess(after.fen());
+    try {
+      sim.move(uciToMove(line.pv[1]));
+      const next = describeMove(sim.fen(), { pv: line.pv.slice(2) }, { max: 1, shallow: true });
+      const why = next.reasons[0];
+      if (why && !/^(Nước củng cố|Tăng hoạt động)/.test(why))
+        add(24, `Chuẩn bị ${next.san}: ${why.charAt(0).toLowerCase()}${why.slice(1)}`);
+    } catch {
+      /* stale PV */
+    }
+  }
 
   if (reasons.length === 0 || reasons.every((r) => r.w < 30)) {
     const m0 = mobility(before, from);
     const m1 = mobility(after, to);
-    if (m1 - m0 >= 2) add(25, `Tăng hoạt động cho ${NAME[moved.type]}: kiểm soát ${m0} → ${m1} ô`);
-  }
-  if (line.pv.length > 1) {
-    const reply = new Chess(after.fen());
-    try {
-      const r = reply.move(uciToMove(line.pv[1]));
-      add(10, `Đối phương nên đáp ${r.san}`);
-    } catch {
-      /* PV ended or is stale */
-    }
+    if (m1 - m0 >= 2) add(22, `Tăng hoạt động cho ${NAME[moved.type]}: kiểm soát ${m0} → ${m1} ô`);
   }
   if (reasons.length === 0) add(5, 'Nước củng cố, giữ thế cờ ổn định');
 
-  return reasons
-    .sort((a, b) => b.w - a.w)
-    .filter((r, i, arr) => arr.findIndex((x) => x.text === r.text) === i)
-    .slice(0, max)
-    .map((r) => r.text);
+  // Nothing else matters once the game is over.
+  if (after.isCheckmate()) reasons.splice(0, reasons.length, ...reasons.filter((r) => r.w >= 95));
+
+  return {
+    san: move.san,
+    tags,
+    reasons: reasons
+      .sort((a, b) => b.w - a.w)
+      .filter((r, i, arr) => arr.findIndex((x) => x.text === r.text) === i)
+      .slice(0, max)
+      .map((r) => r.text),
+  };
+}
+
+/** Squares attacked by the piece standing on `sq`. */
+function targetsOfSquares(chess, sq) {
+  const me = chess.get(sq).color;
+  const out = [];
+  for (const f of FILES) for (let r = 1; r <= 8; r++) if (chess.attackers(f + r, me).includes(sq)) out.push(f + r);
+  return out;
+}
+
+export function explainMove(fen, line, opts) {
+  return describeMove(fen, line, opts).reasons;
+}
+
+/**
+ * Step through the engine line: each ply with its move number and one short
+ * reason, so the player can see how the idea unfolds.
+ */
+export function walkthrough(fen, pv, plies = 6) {
+  const chess = new Chess(fen);
+  const steps = [];
+  for (let i = 0; i < Math.min(pv.length, plies); i++) {
+    const pos = chess.fen();
+    const no = chess.moveNumber();
+    const color = chess.turn();
+    const d = describeMove(pos, { pv: pv.slice(i) }, { max: 1, shallow: true });
+    try {
+      chess.move(uciToMove(pv[i]));
+    } catch {
+      break;
+    }
+    const why = d.reasons[0];
+    steps.push({
+      label: `${no}${color === 'w' ? '.' : '...'} ${d.san}`,
+      color,
+      why: why && !why.startsWith('Nước củng cố') ? why : '',
+    });
+  }
+  return steps;
 }
 
 /** Flip an engine line to the perspective of the side replying to its first move. */

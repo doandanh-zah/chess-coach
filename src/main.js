@@ -15,7 +15,8 @@ import {
   uciToMove,
   winPct,
 } from './classify.js';
-import { explainMove, replyLine } from './explain.js';
+import { describeMove, explainMove, replyLine, walkthrough } from './explain.js';
+import { banterFor } from './banter.js';
 
 const ENGINE_URL = '/engine/stockfish-19-lite-single.js';
 const $ = (id) => document.getElementById(id);
@@ -29,6 +30,7 @@ const DEFAULTS = {
   multipv: 3,
   autoHint: true,
   evalBar: true,
+  banter: true,
 };
 const SETTINGS_KEY = 'chess-coach-settings-v2';
 const settings = loadSettings();
@@ -199,10 +201,15 @@ async function analyzeCurrent() {
   const a = await getAnalysis(entry.fen);
   if (!a || current() !== entry) return;
   entry.analysis = a;
-  entry.candidates = classifyCandidates(entry.fen, a).map((c, i) => ({
-    ...c,
-    reasons: explainMove(entry.fen, c.line, { max: i === 0 ? 3 : 2 }),
-  }));
+  entry.candidates = classifyCandidates(entry.fen, a).map((c, i) => {
+    const d = describeMove(entry.fen, c.line, { max: i === 0 ? 3 : 2 });
+    return {
+      ...c,
+      reasons: d.reasons,
+      plan: walkthrough(entry.fen, c.line.pv),
+      banter: banterFor(d.tags, c.cls, entry.fen + c.uci),
+    };
+  });
   renderAll();
 }
 
@@ -231,12 +238,19 @@ async function gradeMove(entry, depth = settings.depth) {
     (reply
       ? { pv: [entry.uci, ...reply.pv], cp: reply.cp === undefined ? undefined : -reply.cp, mate: reply.mate === undefined ? undefined : -reply.mate }
       : { pv: [entry.uci] });
-  r.reasons = explainMove(prev.fen, own);
-  if (!r.isTop) r.bestReasons = explainMove(prev.fen, before.lines[0], { max: 2 });
+  const d = describeMove(prev.fen, own);
+  r.reasons = d.reasons;
+  r.plan = walkthrough(prev.fen, own.pv);
+  r.banter = banterFor(d.tags, r.cls, prev.fen + entry.uci);
+  if (!r.isTop) {
+    r.bestReasons = explainMove(prev.fen, before.lines[0], { max: 2 });
+    r.bestPlan = walkthrough(prev.fen, before.lines[0].pv);
+  }
   if (['inaccuracy', 'mistake', 'blunder'].includes(r.cls) && own.pv.length > 1) {
     const refute = replyLine(own);
     r.refutationSan = uciToSan(entry.fen, refute.pv[0]);
-    r.refutation = explainMove(entry.fen, refute, { max: 2 }).filter((t) => !t.startsWith('Đối phương nên đáp'));
+    r.refutation = explainMove(entry.fen, refute, { max: 2 });
+    r.refutationPlan = walkthrough(entry.fen, refute.pv);
   }
   entry.result = r;
   renderAll();
@@ -465,20 +479,6 @@ function uciToSan(fen, uci) {
   }
 }
 
-function pvToSan(fen, pv, max = 6) {
-  const chess = new Chess(fen);
-  const out = [];
-  for (const uci of pv.slice(0, max)) {
-    try {
-      const m = chess.move(uciToMove(uci));
-      out.push(m.san);
-    } catch {
-      break;
-    }
-  }
-  return out.join(' ');
-}
-
 function renderFeedback() {
   const el = $('feedback');
   const entry = shown();
@@ -519,25 +519,42 @@ function renderFeedback() {
         <div class="muted small">${who} · ${moveNo(entry)} · tỉ lệ thắng ${r.winBefore.toFixed(0)}% → ${r.winAfter.toFixed(0)}%</div>
       </div>
     </div>
+    ${banterHtml(r.banter)}
     <div class="fb-body">${explain}</div>
     ${
       r.refutation
         ? `<div class="why-block"><div class="why-title">Vì sao chưa tốt?</div>
-           <div class="why"><div>Đối phương có thể đáp <b>${r.refutationSan}</b></div>${whyHtml(r.refutation)}</div></div>`
+           <div class="why"><div>Đối phương có thể đáp <b>${r.refutationSan}</b></div>${whyHtml(r.refutation)}</div>
+           ${planHtml(r.refutationPlan, 'Đối phương sẽ trừng phạt thế nào', false)}</div>`
         : r.reasons?.length && r.cls !== 'forced'
-          ? `<div class="why-block"><div class="why-title">Vì sao nước này hay?</div><div class="why">${whyHtml(r.reasons)}</div></div>`
+          ? `<div class="why-block"><div class="why-title">Vì sao nước này hay?</div><div class="why">${whyHtml(r.reasons)}</div>
+             ${planHtml(r.plan, 'Diễn biến dự kiến', false)}</div>`
           : ''
     }
     ${
       r.isTop
         ? ''
         : `<div class="why-block"><div class="why-title">Nước tốt nhất: <b class="best-san">${bestSan}</b></div>
-           <div class="why">${whyHtml(r.bestReasons ?? [])}</div></div>`
+           <div class="why">${whyHtml(r.bestReasons ?? [])}</div>
+           ${planHtml(r.bestPlan, 'Diễn biến nếu đi nước tốt nhất', false)}</div>`
     }`;
 }
 
 function whyHtml(reasons) {
   return reasons.map((t) => `<div>${t}</div>`).join('');
+}
+
+function banterHtml(text) {
+  return settings.banter && text ? `<div class="banter">🎙️ ${text}</div>` : '';
+}
+
+/** Collapsible step-by-step engine line with one reason per move. */
+function planHtml(steps, title, open) {
+  if (!steps?.length) return '';
+  const rows = steps
+    .map((s) => `<div class="step ${s.color}"><b>${s.label}</b>${s.why ? ` <span>${s.why}</span>` : ''}</div>`)
+    .join('');
+  return `<details class="plan"${open ? ' open' : ''}><summary>${title}</summary><div class="steps">${rows}</div></details>`;
 }
 
 function moveNo(entry) {
@@ -567,8 +584,9 @@ function renderHints() {
         <div class="hint-main">
           <div><b class="hint-san">${uciToSan(entry.fen, c.uci)}</b>
             <span class="hint-label" style="color:${cls.color}">${cls.label}</span></div>
+          ${banterHtml(c.banter)}
           <div class="why">${whyHtml(c.reasons)}</div>
-          <div class="pv muted small">Biến: ${pvToSan(entry.fen, c.line.pv)}</div>
+          ${planHtml(c.plan, 'Diễn biến dự kiến', i === 0)}
         </div>
         <span class="score">${formatScore(c.line, true, turn)}</span>
       </li>`;
@@ -650,6 +668,7 @@ $('hints').addEventListener('mouseleave', () => {
   drawShapes();
 });
 $('hints').addEventListener('click', (e) => {
+  if (e.target.closest('.plan')) return; // expanding the plan shouldn't play the move
   const li = e.target.closest('li[data-i]');
   const c = li && current().candidates?.[+li.dataset.i];
   if (c && !isBotTurn()) playMove(c.uci);
@@ -681,6 +700,7 @@ function bindSettings() {
     $('setMultipv').value = settings.multipv;
     $('setAutoHint').checked = settings.autoHint;
     $('setEvalBar').checked = settings.evalBar;
+    $('setBanter').checked = settings.banter;
     document.body.classList.toggle('mode-bot', settings.mode === 'bot');
   };
   sync();
@@ -729,6 +749,11 @@ function bindSettings() {
     hintsVisible = t.checked;
     renderHints();
     drawShapes();
+  });
+  on('setBanter', 'change', (t) => {
+    settings.banter = t.checked;
+    renderFeedback();
+    renderHints();
   });
   on('setEvalBar', 'change', (t) => {
     settings.evalBar = t.checked;
