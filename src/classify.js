@@ -45,10 +45,32 @@ export function uciToMove(uci) {
  * Does playing `uci` leave material en prise that the opponent can win?
  * Returns the net material (pawns) given up, after subtracting what the move captured.
  */
+/** Material `color` stands to lose on `square` (0 if the piece there is safe). */
+function lossAt(chess, square, color) {
+  const opp = color === 'w' ? 'b' : 'w';
+  const p = chess.get(square);
+  if (!p || p.color !== color || p.type === 'p' || p.type === 'k') return 0;
+  const attackers = chess.attackers(square, opp);
+  if (attackers.length === 0) return 0;
+  const defended = chess.attackers(square, color).length > 0;
+  const attackerValues = attackers
+    .map((a) => chess.get(a).type)
+    .filter((t) => !(defended && t === 'k'))
+    .map((t) => VALUE[t]);
+  if (attackerValues.length === 0) return 0;
+  return defended ? Math.max(0, VALUE[p.type] - Math.min(...attackerValues)) : VALUE[p.type];
+}
+
+/**
+ * Does playing `uci` put material en prise that the opponent can win?
+ * Only pieces that were safe before the move count (the moved piece always
+ * does), so a piece left hanging earlier isn't "sacrificed" again every move.
+ * Returns the net material (pawns) given up, after subtracting what the move captured.
+ */
 export function sacrificedMaterial(fen, uci) {
+  const before = new Chess(fen);
+  const mover = before.turn();
   const chess = new Chess(fen);
-  const mover = chess.turn();
-  const opp = mover === 'w' ? 'b' : 'w';
   let move;
   try {
     move = chess.move(uciToMove(uci));
@@ -60,18 +82,10 @@ export function sacrificedMaterial(fen, uci) {
   let worst = 0;
   for (const row of chess.board()) {
     for (const sq of row) {
-      if (!sq || sq.color !== mover || sq.type === 'p' || sq.type === 'k') continue;
-      const attackers = chess.attackers(sq.square, opp);
-      if (attackers.length === 0) continue;
-      const defended = chess.attackers(sq.square, mover).length > 0;
-      const attackerValues = attackers
-        .map((a) => chess.get(a).type)
-        .filter((t) => !(defended && t === 'k'))
-        .map((t) => VALUE[t]);
-      if (attackerValues.length === 0) continue;
-      const val = VALUE[sq.type];
-      const loss = defended ? val - Math.min(...attackerValues) : val;
-      worst = Math.max(worst, loss);
+      if (!sq || sq.color !== mover) continue;
+      const wasLoose = sq.square !== move.to && lossAt(before, sq.square, mover) > 0;
+      if (wasLoose) continue;
+      worst = Math.max(worst, lossAt(chess, sq.square, mover));
     }
   }
   return worst - captured;

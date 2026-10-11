@@ -16,7 +16,7 @@ import {
   winPct,
 } from './classify.js';
 import { describeMove, explainMove, replyLine, walkthrough } from './explain.js';
-import { banterFor } from './banter.js';
+import { commentate } from './banter.js';
 
 const ENGINE_URL = '/engine/stockfish-19-lite-single.js';
 const $ = (id) => document.getElementById(id);
@@ -202,12 +202,12 @@ async function analyzeCurrent() {
   if (!a || current() !== entry) return;
   entry.analysis = a;
   entry.candidates = classifyCandidates(entry.fen, a).map((c, i) => {
-    const d = describeMove(entry.fen, c.line, { max: i === 0 ? 3 : 2, prevUci: entry.uci });
+    const d = describeMove(entry.fen, c.line, { max: i === 0 ? 3 : 2, prevUci: lastCaptureUci(entry) });
     return {
       ...c,
       reasons: d.reasons,
-      plan: walkthrough(entry.fen, c.line.pv, 6, entry.uci),
-      banter: banterFor(contextTags(history.length, entry.fen, d, c.line), c.cls, entry.fen + c.uci, banterVars(entry.fen, history.length, c.uci, c.line.mate)),
+      plan: walkthrough(entry.fen, c.line.pv, 6, lastCaptureUci(entry)),
+      banter: commentate(commentaryContext(history.length, entry.fen, d, c.line, c.cls)),
     };
   });
   renderAll();
@@ -215,6 +215,7 @@ async function analyzeCurrent() {
 
 async function gradeMove(entry, depth = settings.depth) {
   const idx = history.indexOf(entry);
+  if (idx < 1) return; // the move was undone, or a different game was loaded
   const prev = history[idx - 1];
   const before = await getAnalysis(prev.fen, depth);
   if (!before || !history.includes(entry)) return;
@@ -238,28 +239,34 @@ async function gradeMove(entry, depth = settings.depth) {
     (reply
       ? { pv: [entry.uci, ...reply.pv], cp: reply.cp === undefined ? undefined : -reply.cp, mate: reply.mate === undefined ? undefined : -reply.mate }
       : { pv: [entry.uci] });
-  const d = describeMove(prev.fen, own, { prevUci: prev.uci });
+  const d = describeMove(prev.fen, own, { prevUci: lastCaptureUci(prev) });
   r.reasons = d.reasons;
-  r.plan = walkthrough(prev.fen, own.pv, 6, prev.uci);
+  r.plan = walkthrough(prev.fen, own.pv, 6, lastCaptureUci(prev));
   entry.tags = d.tags;
-  r.banter = banterFor(
-    contextTags(idx, prev.fen, d, own, before.lines[0]),
-    r.cls,
-    prev.fen + entry.uci,
-    banterVars(prev.fen, idx, entry.uci, own.mate),
-  );
+  entry.facts = d.facts;
+  entry.result = r; // the commentary below reads this entry's neighbours
+  if (['inaccuracy', 'mistake', 'blunder'].includes(r.cls) && own.pv.length > 1)
+    r.refutationSan = uciToSan(entry.fen, own.pv[1]);
+  const cctx = commentaryContext(idx, prev.fen, d, own, r.cls, before.lines[0], r);
+  entry.ctxTags = cctx.tags;
+  r.banter = commentate(cctx);
   if (!r.isTop) {
-    r.bestReasons = explainMove(prev.fen, before.lines[0], { max: 2, prevUci: prev.uci });
-    r.bestPlan = walkthrough(prev.fen, before.lines[0].pv, 6, prev.uci);
+    r.bestReasons = explainMove(prev.fen, before.lines[0], { max: 2, prevUci: lastCaptureUci(prev) });
+    r.bestPlan = walkthrough(prev.fen, before.lines[0].pv, 6, lastCaptureUci(prev));
   }
   if (['inaccuracy', 'mistake', 'blunder'].includes(r.cls) && own.pv.length > 1) {
     const refute = replyLine(own);
     r.refutationSan = uciToSan(entry.fen, refute.pv[0]);
-    r.refutation = explainMove(entry.fen, refute, { max: 2, prevUci: entry.uci });
-    r.refutationPlan = walkthrough(entry.fen, refute.pv, 6, entry.uci);
+    r.refutation = explainMove(entry.fen, refute, { max: 2, prevUci: lastCaptureUci(entry) });
+    r.refutationPlan = walkthrough(entry.fen, refute.pv, 6, lastCaptureUci(entry));
   }
   entry.result = r;
   renderAll();
+}
+
+/** The move that led to `entry`, if it captured something (for spotting recaptures). */
+function lastCaptureUci(entry) {
+  return entry?.san?.includes('x') ? entry.uci : null;
 }
 
 // ---------- commentary context ----------
@@ -278,7 +285,9 @@ function contextTags(ply, fen, d, line, bestBefore) {
   const mine = earlier.filter((h) => h.color === color).slice(-2);
   const checking = d.san.endsWith('+') || d.san.endsWith('#');
   if (checking && mine.length === 2 && mine.every((h) => /[+#]$/.test(h.san))) tags.add('chaseKing');
-  if (d.tags.has('sac') && mine.some((h) => h.tags?.has('sac'))) tags.add('comboSac');
+  const theirLast = earlier.filter((h) => h.color !== color).slice(-2);
+  if (theirLast.length === 2 && theirLast.every((h) => /[+#]$/.test(h.san))) tags.add('chased');
+  if (d.tags.has('sac') && mine.some((h) => h.ctxTags?.has('sac'))) tags.add('comboSac');
   if (d.tags.has('mate') && ply >= 60) tags.add('longFinish');
   if (bestBefore?.mate > 0 && !(line.mate > 0) && !d.tags.has('mate')) tags.add('missedMate');
   const theirs = earlier[earlier.length - 1];
@@ -287,15 +296,24 @@ function contextTags(ply, fen, d, line, bestBefore) {
   return tags;
 }
 
-function banterVars(fen, ply, uci, mate) {
+/** Everything the commentator needs about a move and the game around it. */
+function commentaryContext(ply, fen, d, line, cls, bestBefore, result) {
   const color = fen.split(' ')[1];
-  const PROMO = { q: 'Hậu', r: 'Xe', b: 'Tượng', n: 'Mã' };
+  const earlier = history.slice(1, ply);
+  const theirs = earlier.filter((h) => h.color !== color).slice(-3);
+  const prev = earlier[earlier.length - 1];
   return {
-    side: color === 'w' ? 'Trắng' : 'Đen',
-    opp: color === 'w' ? 'Đen' : 'Trắng',
+    facts: d.facts,
+    tags: contextTags(ply, fen, d, line, bestBefore),
+    cls,
+    color,
+    prev: prev && prev.color !== color ? { cls: prev.result?.cls, tags: prev.ctxTags ?? prev.tags, facts: prev.facts } : null,
+    oppBad: theirs.filter((h) => ['inaccuracy', 'mistake', 'blunder'].includes(h.result?.cls)).length,
+    winAfter: result ? result.winAfter : winPct(line),
+    refutation: result?.refutationSan,
+    mate: line.mate > 0 ? line.mate : undefined,
     moves: Math.ceil(ply / 2),
-    promo: PROMO[uci[4]] ?? '',
-    mate: mate > 0 ? mate : '',
+    seed: fen + line.pv[0],
   };
 }
 
@@ -797,6 +815,7 @@ function bindSettings() {
     settings.banter = t.checked;
     renderFeedback();
     renderHints();
+    renderReview();
   });
   on('setEvalBar', 'change', (t) => {
     settings.evalBar = t.checked;
@@ -1126,7 +1145,27 @@ function renderReview() {
   if (history.length > 1) {
     renderGraph();
     renderSummary();
+    renderStory();
   }
+}
+
+/** The whole game told as running commentary, one line per notable move. */
+function renderStory() {
+  $('storyBox').hidden = !settings.banter;
+  if (!settings.banter) return;
+  const items = history
+    .map((h, i) => (h.result?.banter ? { h, i } : null))
+    .filter(Boolean)
+    .map(
+      ({ h, i }) => `<div class="story-item${i === reviewIdx ? ' cur' : ''}" data-ply="${i}">
+        <b>${moveNo(h)} ${h.san}</b>${badgeHtml(h.result.cls)}
+        <span>${h.result.banter}</span>
+      </div>`,
+    );
+  $('story').innerHTML = items.join('') || '<div class="muted small">Đang chuẩn bị bình luận…</div>';
+  const box = $('story');
+  const cur = box.querySelector('.cur');
+  if (cur) box.scrollTop = cur.offsetTop - box.offsetTop - box.clientHeight / 2; // keep the page itself still
 }
 
 function loadPgn(text) {
@@ -1189,6 +1228,10 @@ $('moves').addEventListener('click', (e) => {
   if (!mv || editing) return;
   if (reviewing) gotoPly(+mv.dataset.ply);
   else enterReview(+mv.dataset.ply);
+});
+$('story').addEventListener('click', (e) => {
+  const item = e.target.closest('[data-ply]');
+  if (item) gotoPly(+item.dataset.ply);
 });
 $('pgnLoad').onclick = () => {
   const err = loadPgn($('pgnText').value);

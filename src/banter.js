@@ -1,99 +1,21 @@
-// Fun Vietnamese commentary ("bình luận vui"), in the dramatic action /
-// sports-commentary voice of Vietnamese chess YouTube ("phế Mã kinh hoàng",
-// "truy sát Vua", "ép Vua vào tuyệt lộ", "lật kèo"…).
+// "Bình luận vui": funny, story-like Vietnamese commentary in the style of
+// Vietnamese chess YouTube ("thần Mã hoá thần Zeus", "xe tăng cài số lùi",
+// "chiếu hết trong sự ngỡ ngàng của Đen"…).
 //
-// Add or edit lines freely. Each key is an event tag (from describeMove() or
-// contextTags() in main.js) or a move class. Placeholders:
-//   {side} side that moved (Trắng/Đen)   {opp} the other side
-//   {mate} moves to mate                 {moves} full moves played so far
-//   {promo} piece promoted to
+// A sentence is built from three parts:
+//   opener  — how the move relates to what just happened
+//             ("Chỉ chờ có thế, Trắng…", "Thấy nguy, Đen vội…", "Thấy Đen có vẻ gà, Trắng…")
+//   action  — what the move does, with the pieces' nicknames
+//   kicker  — the punchline ("— chiếu hết trong sự ngỡ ngàng của Đen!")
+// Edit the phrases below freely; keep the {placeholders}.
 
-const LINES = {
-  // --- the finish
-  castleMate: ['Nhập thành chiếu hết — hiếm có khó tìm, chụp màn hình lại ngay!'],
-  smothered: [
-    'Chiếu hết ngạt thở! Vua chết trong vòng vây của chính quân nhà.',
-    'Mã luồn sâu vào tận hậu cung — Vua hết đường thở!',
-  ],
-  scholarMate: ['Chiếu hết học trò — mới vào trận đã hạ màn!'],
-  pawnMate: ['Tốt chiếu hết — cái kết khó tin nhất bàn cờ!'],
-  longFinish: ['Tra tấn suốt {moves} nước, cái kết đẳng cấp!', 'Cuộc chiến sinh tử {moves} nước khép lại bằng một đòn kết liễu!'],
-  backRank: ['Vua bị nhốt ở hàng cuối, hết đường chạy — chiếu hết!', 'Ép Vua vào chân tường, hạ màn ở hàng cuối!'],
-  mate: ['Ép Vua vào tuyệt lộ — chiếu hết!', 'Hết đường chạy! {side} kết liễu ván đấu.', 'Đòn kết liễu đẳng cấp — Vua {opp} gục ngã!'],
-  stalemate: ['Hòa pat! Thắng đến nơi lại để Vua hết nước đi — tiếc đứt ruột!'],
-  missedMate: [
-    'Bỏ lỡ chiếu hết! Cơ hội vàng trôi qua kẽ tay.',
-    'Có đòn chiếu hết ngay trước mắt mà không thấy — tiếc hùi hụi!',
-  ],
+const NICK = { k: 'Thượng đế', q: 'em Hậu', r: 'xe tăng', b: 'voi chiến', n: 'thần Mã', p: 'chú Tốt' };
+const PLAIN = { k: 'Vua', q: 'Hậu', r: 'Xe', b: 'Tượng', n: 'Mã', p: 'Tốt' };
+const WORTH = { k: 0, q: 9, r: 5, b: 3, n: 3, p: 1 };
 
-  // --- sacrifices
-  comboSac: ['Liên hoàn thí quân! {side} chơi khô máu thật sự!', 'Thí liền mấy quân — được ăn cả, ngã về không!'],
-  sacQ: ['Phế Hậu! {side} dụ đối thủ sập bẫy!', 'Thí Hậu kinh hoàng — chơi khô máu đến cùng!'],
-  sacR: ['Thí Xe kiểu thằng liều!', 'Phế Xe điên rồ — {opp} có dám ăn không?'],
-  sacKingside: ['Thí quân xé toang phòng tuyến trước mặt Vua!', 'Phá tan lá chắn của Vua — cuộc truy sát bắt đầu!'],
-  sacN: ['Phế Mã kinh hoàng!', 'Thí Mã: cái bẫy chết người hay sai lầm khó tin?'],
-  sacB: ['Thí Tượng kinh điển!', 'Phế Tượng — một đòn mở toang cục diện!'],
-  sac: ['Thí quân không chớp mắt — liều ăn nhiều!'],
-
-  // --- attacks
-  promoteQueen: [
-    'Thái giám hóa thái hậu!',
-    'Tốt vượt ải thành công — lên ngôi Hoàng hậu, cục diện đổi chiều!',
-    'Từ lính trơn thành Hoàng hậu — {side} có thêm vũ khí hủy diệt!',
-  ],
-  underpromote: ['Thái giám không thèm làm thái hậu, chọn làm {promo}!', 'Phong cấp thành {promo} — không lấy Hậu mà vẫn đẳng cấp!'],
-  matingNet: ['Ép Vua vào tuyệt lộ — chiếu hết sau {mate} nước!', 'Lưới chiếu hết đã giăng, Vua {opp} hết đường chạy!'],
-  chaseKing: ['Truy sát Vua! Rượt chạy khắp bàn cờ như phim hành động!', 'Ra đòn liên tiếp — Vua {opp} không kịp thở!'],
-  royalFork: ['Chĩa đôi Vua và Hậu — {opp} không kịp trở tay!'],
-  knightFork: ['Mã chĩa đôi — một nước hai mục tiêu, đối thủ không kịp trở tay!', 'Cú nhảy chết người của Mã — trúng hai đích một lúc!'],
-  pawnFork: ['Tốt chĩa đôi — lính trơn cũng biết ra đòn hiểm!'],
-  fork: ['Một đòn trúng hai mục tiêu!'],
-  discoveredCheck: ['Chiếu mở! Ra đòn liên tiếp, {opp} trở tay không kịp!'],
-  pinKing: ['Ghim chết vào Vua — nhúc nhích là mất quân!'],
-  skewer: ['Đòn xiên! Quân phía trước né, quân phía sau mất mạng.'],
-  pin: ['Ghim chặt — {opp} bị trói tay trói chân.'],
-  discovered: ['Đòn mở bất ngờ — đồng đội nhường đường để ra đòn!'],
-  turnaround: ['Lật kèo! Tưởng thua đến nơi, {side} vùng lên mạnh mẽ!', 'Chớp thời cơ — {side} trừng phạt sai lầm không thương tiếc!'],
-  freeQueen: ['Hậu cho không — nhận quà mà không cần cảm ơn!'],
-  stopMate: ['Thoát hiểm trong gang tấc — chặn đứng đòn chiếu hết!', 'Bị dồn đến chân tường nhưng vẫn tìm ra sinh lộ!'],
-  mateThreat: ['Lưỡi dao đã kề cổ — dọa chiếu hết!'],
-  enPassant: ['Bắt Tốt qua đường — đòn hiểm ít ai ngờ tới!'],
-  bongcloud: ['Vua xuất cung từ những nước đầu — liều hay là tự tin?'],
-  kingWalk: ['Vua dạo bước giữa vòng vây — gan to thật!'],
-  queenTrade: ['Đổi Hậu — trận chiến bước sang hồi mới.'],
-  earlyQueen: ['Hậu xuất trận quá sớm — coi chừng bị quân nhỏ rượt chạy khắp bàn!'],
-  castleLong: ['Nhập thành dài — Vua sang cánh Hậu, chuẩn bị đấu khô máu!'],
-  castleShort: ['Nhập thành — Vua lui về hậu phương an toàn.'],
-  hitQueen: ['Chọc thẳng vào Hậu — bà hoàng phải chạy!'],
-  freePiece: ['Ăn không quân — quà tặng không thể chối từ!'],
-
-  // --- move classes (used when no event fits)
-  brilliant: ['Thế này mới gọi là thiên tài!', 'Nước đi khiến cả khán đài nín thở!'],
-  great: ['Nước duy nhất — đi trên dây mà không ngã!', 'Tìm ra sinh lộ giữa cuộc chiến sinh tử!'],
-  blunder: [
-    'Sai lầm khó tin! Một nước đi, cả ván sụp đổ.',
-    'Địa chấn! {side} tặng luôn chiến thắng cho đối thủ.',
-    'Thua sốc vì một phút lơ là!',
-  ],
-  mistake: ['Đi sai một bước — {opp} có cơ hội phản công!', 'Run tay rồi — thế cờ bắt đầu lung lay.'],
-  inaccuracy: ['Chưa chuẩn lắm — bỏ lỡ cơ hội làm khó đối thủ.', 'Lệch một nhịp, như sút trúng cột dọc.'],
-};
-
-const PRIORITY = [
-  'castleMate', 'smothered', 'scholarMate', 'pawnMate', 'longFinish', 'backRank', 'mate', 'stalemate',
-  'comboSac', 'sacQ', 'sacR', 'sacKingside', 'sacN', 'sacB', 'sac',
-  'promoteQueen', 'underpromote', 'matingNet', 'chaseKing', 'royalFork', 'knightFork', 'pawnFork', 'fork',
-  'discoveredCheck', 'pinKing', 'skewer', 'pin', 'discovered', 'turnaround', 'freeQueen',
-  'stopMate', 'mateThreat', 'enPassant', 'bongcloud', 'kingWalk', 'queenTrade', 'earlyQueen',
-  'castleLong', 'castleShort', 'hitQueen', 'freePiece',
-];
-
-// Bad moves get the class line even if a flashy event happened (a "sacrifice"
-// that loses is just a blunder) — except for a few events that describe them better.
-const BAD = new Set(['blunder', 'mistake', 'inaccuracy']);
-const BAD_FLAVOUR = ['missedMate', 'bongcloud', 'kingWalk', 'earlyQueen'];
 const STRONG = new Set(['brilliant', 'great', 'best', 'excellent']);
-const SAC_TAGS = new Set(['comboSac', 'sacQ', 'sacR', 'sacKingside', 'sacN', 'sacB', 'sac']);
+const BAD = new Set(['blunder', 'mistake', 'inaccuracy']);
+const TACTICAL = ['mate', 'matingNet', 'sac', 'knightFork', 'fork', 'royalFork', 'pawnFork', 'freeQueen', 'mateThreat', 'discoveredCheck', 'skewer', 'pinKing', 'promoteQueen'];
 
 function hash(str) {
   let h = 0;
@@ -102,21 +24,168 @@ function hash(str) {
 }
 
 /**
- * @param {Set<string>} tags events for this move
- * @param {string} [cls] move class, if known
- * @param {string} seed stable per move (e.g. fen + uci) so the line doesn't flicker
- * @param {Record<string, string|number>} vars placeholder values
+ * @param {object} ctx
+ * @param {object} ctx.facts     from describeMove()
+ * @param {Set<string>} ctx.tags events (describeMove + game context)
+ * @param {string} [ctx.cls]     move class if known
+ * @param {'w'|'b'} ctx.color    side that moves
+ * @param {object} [ctx.prev]    opponent's previous move: { cls, tags, facts }
+ * @param {number} ctx.oppBad    opponent's weak moves among their last three
+ * @param {number} [ctx.winAfter] mover's win % after the move
+ * @param {string} [ctx.refutation] SAN of the opponent's best reply (for weak moves)
+ * @param {number} [ctx.mate]    moves to mate, if the line mates
+ * @param {number} ctx.moves     full moves played
+ * @param {string} ctx.seed      stable per move, so the wording doesn't flicker
+ * @returns {string|null}
  */
-export function banterFor(tags, cls, seed, vars = {}) {
-  let key;
-  if (BAD.has(cls)) key = BAD_FLAVOUR.find((t) => tags.has(t)) ?? cls;
-  else {
-    // Only celebrate a sacrifice when it is actually a strong move.
-    const sacOk = !cls || STRONG.has(cls);
-    key = PRIORITY.find((t) => tags.has(t) && (sacOk || !SAC_TAGS.has(t))) ?? (cls in LINES ? cls : null);
+export function commentate(ctx) {
+  const { facts: f, tags, cls } = ctx;
+  if (!f) return null;
+  const side = ctx.color === 'w' ? 'Trắng' : 'Đen';
+  const opp = ctx.color === 'w' ? 'Đen' : 'Trắng';
+  let n = 0;
+  const pick = (...options) => options[hash(`${ctx.seed}|${n++}`) % options.length];
+  const nick = NICK[f.piece];
+  const capName = f.captured ? PLAIN[f.captured] : '';
+  const into = f.forward ? 'lên' : f.retreat ? 'về' : 'sang';
+  const strong = !cls || STRONG.has(cls);
+  const aggressive = f.check || f.captured || tags.has('sac') || f.targets.length || f.threat || f.mateThreat;
+  const prevOffered = ctx.prev?.facts?.bait?.square ?? (ctx.prev?.tags?.has('sac') ? ctx.prev?.facts?.to : null);
+  const acceptsSac =
+    f.captured && ctx.prev?.tags?.has('sac') && STRONG.has(ctx.prev?.cls) && prevOffered === f.to;
+
+  // --- opener: who moves, and in what mood
+  let opener = side;
+  if (tags.has('turnaround') && strong) opener = `Lật kèo! ${side}`;
+  else if (['mistake', 'blunder'].includes(ctx.prev?.cls) && strong) opener = pick(`Chỉ chờ có thế, ${side}`, `Không chậm trễ, ${side}`);
+  else if (ctx.oppBad >= 2 && aggressive && strong) opener = `Thấy ${opp} có vẻ gà, ${side}`;
+
+  // --- weak moves: tell the story of the slip
+  if (BAD.has(cls)) {
+    const punish = ctx.refutation ? ` ${opp} chỉ chờ có thế: ${ctx.refutation}!` : '';
+    if (tags.has('missedMate')) return `Có đòn chiếu hết ngay trước mắt mà ${side} không thấy — bỏ lỡ cơ hội vàng!`;
+    if (tags.has('bongcloud')) return `${side} cho Thượng đế xuất cung từ sớm — liều hay là tự tin đây?${punish}`;
+    if (tags.has('earlyQueen')) return `${side} cho em Hậu ra trận quá sớm — coi chừng bị quân nhỏ rượt chạy khắp bàn!`;
+    if (f.captured && cls !== 'inaccuracy')
+      return `${side} hí hửng ăn ${capName}… tưởng ${opp} hớ hênh, ai ngờ trúng bẫy!${punish}`;
+    if (cls === 'blunder') return `Tưởng ngon, ${side} đưa ${nick} ${into} ${f.to}…${punish || ' một nước đi, cả ván sụp đổ!'}`;
+    if (cls === 'mistake') return `${side} đưa ${nick} ${into} ${f.to} — tưởng ngon, nhưng ${opp} có cơ hội phản công${ctx.refutation ? ` bằng ${ctx.refutation}` : ''}.`;
+    return pick(
+      `${side} hơi lỏng tay — vẫn còn nước hay hơn.`,
+      'Nước đi chưa chuẩn lắm, như sút trúng cột dọc.',
+      `${side} đi hơi chậm một nhịp, để ${opp} dễ thở hơn.`,
+    );
   }
-  if (!key || !LINES[key]) return null;
-  const options = LINES[key];
-  const line = options[hash(seed + key) % options.length];
-  return line.replace(/\{(\w+)\}/g, (m, k) => (vars[k] ?? m));
+
+  // --- the finish
+  if (tags.has('mate')) {
+    let how = `lao ${nick} vào ${f.to}`;
+    if (tags.has('smothered')) how = 'cho thần Mã luồn vào tận hậu cung';
+    else if (tags.has('castleMate')) how = 'nhập thành';
+    else if (tags.has('pawnMate')) how = 'dùng chú Tốt';
+    const tail = tags.has('longFinish') ? ` Tra tấn suốt ${ctx.moves} nước, cái kết đẳng cấp!` : '';
+    return `${opener} ${how} — chiếu hết trong sự ngỡ ngàng của ${opp}!${tail}`;
+  }
+  if (tags.has('stalemate')) return `${side} dồn ép quá tay — Thượng đế ${opp} hết nước đi, hòa pat! Tiếc đứt ruột!`;
+
+  if (f.promotion === 'q') return pick('Thái giám hoá thái hậu!', 'Thái giám hoá thái hậu! Chú Tốt vượt ải thành công.') + ` ${side} có thêm em Hậu mới.`;
+  if (f.promotion) return `Thái giám không thèm làm thái hậu, xin làm ${PLAIN[f.promotion]}!`;
+
+  // --- no choice
+  const plainAction = f.captured ? `ăn ${capName}` : `đưa ${nick} ${into} ${f.to}`;
+  if (cls === 'forced') return `Cực chẳng đã, ${side} đành ${plainAction}.`;
+  if (acceptsSac) {
+    return ['brilliant', 'great'].includes(ctx.prev?.cls)
+      ? `Cực chẳng đã, ${side} đành ăn ${capName}.`
+      : `${side} hí hửng ăn ${capName} — quà ngon thì phải nhận!`;
+  }
+  // A king in check running for its life
+  if (f.piece === 'k' && f.inCheckBefore && !f.captured) {
+    return tags.has('chased')
+      ? pick(`Thượng đế ${side} chạy loạn ${into} ${f.to} — bị truy sát khắp bàn cờ!`, `Thượng đế ${side} hoảng hốt bỏ chạy ${into} ${f.to}.`)
+      : `Thượng đế ${side} né sang ${f.to}.`;
+  }
+  if (tags.has('recapture')) {
+    const withCheck = f.check ? ', tiện tay chiếu luôn Thượng đế' : '';
+    return pick(`Theo bản năng, ${side} ăn lại ${capName}${withCheck}.`, `Không chậm trễ, ${side} ăn lại ${capName}${withCheck}.`);
+  }
+
+  // --- sacrifices
+  if (tags.has('sacQ') && (f.forcedTake || f.check))
+    return `${opener} nhét Hậu vào mồm bắt ${opp} ăn! ${opp} không ngờ gặp phải thằng liều.`;
+  // Also count captures that leave the capturing piece to be won back cheaply
+  // (Nxb5 for a pawn, Rxd7 for a knight): the static sacrifice check misses those.
+  const givesUp = f.captured && f.hanging && WORTH[f.piece] - WORTH[f.captured] >= 2;
+  if (tags.has('sac') || (givesUp && strong && cls)) {
+    const kicker = tags.has('comboSac')
+      ? 'Liên hoàn thí quân, chơi khô máu thật sự!'
+      : tags.has('sacKingside')
+        ? 'Xé toang phòng tuyến trước mặt Thượng đế!'
+        : `${opp} không ngờ gặp phải thằng liều.`;
+    // The piece offered is not always the one that moved (e.g. leaving the Queen hanging).
+    if (f.bait && f.bait.square !== f.to)
+      return `${opener} lạnh lùng bỏ mặc ${NICK[f.bait.type]} ở ${f.bait.square}, lao ${nick} vào ${f.to}! ${kicker}`;
+    return `${opener} lạnh lùng lao ${nick} vào ${f.to}! ${kicker}`;
+  }
+
+  // --- forks and big captures
+  if (tags.has('knightFork')) return `${opener} xuất chiêu thần Mã hoá thần Zeus, chĩa cùng lúc ${f.targets.join(' và ')}!`;
+  if (tags.has('pawnFork')) return `${opener} cho chú Tốt chĩa đôi ${f.targets.join(' và ')} — lính trơn cũng biết ra đòn hiểm!`;
+  if (f.targets.length >= 2 && f.piece !== 'k' && f.targets.some((t) => !t.startsWith('Tốt')))
+    return `${opener} dùng ${nick} chĩa đôi ${f.targets.join(' và ')} — ${opp} không kịp trở tay!`;
+  if (f.piece === 'k' && f.captured === 'q') return `Thượng đế bế Quan Âm! ${side} cho Vua tự tay xơi em Hậu ở ${f.to}.`;
+  if (f.captured === 'q') return `${opener} múc được em Hậu thơm phức!`;
+  if (f.piece === 'q' && f.captured === 'r') return `Lớp trưởng vồ lớp phó — em Hậu xơi gọn xe tăng ở ${f.to}!`;
+  if (tags.has('freePiece') || tags.has('freeQueen')) return `${opener} ăn luôn ${capName} ở ${f.to} — cái này mình xin!`;
+
+  // --- hunting the king
+  if (tags.has('chaseKing')) return `${opener} tung tiếp đòn chiếu sát thủ ${f.san} — truy sát Thượng đế ${opp} chạy khắp bàn cờ!`;
+  if (tags.has('discoveredCheck')) return `${opener} mở cửa cho đồng đội chiếu Vua — đòn chiếu sát thủ!`;
+  if (tags.has('matingNet')) {
+    return f.check
+      ? `${opener} tung đòn chiếu sát thủ ${f.san} — Thượng đế ${opp} sắp hết đường chạy!`
+      : `${opener} giăng lưới, ép Thượng đế ${opp} vào tuyệt lộ${ctx.mate ? ` — chiếu hết sau ${ctx.mate} nước` : ''}!`;
+  }
+
+  // --- ordinary captures (trades)
+  if (f.captured) {
+    if (f.piece === 'p' && f.captured === 'p' && !f.check) return null; // pawn trades aren't news
+    const withCheck = f.check ? ', tiện tay chiếu luôn Thượng đế' : '';
+    return f.piece === f.captured
+      ? `${side} cho ${nick} đổi lấy ${nick} ở ${f.to}${withCheck}.`
+      : `${opener} cho ${nick} xơi ${capName} ở ${f.to}${withCheck}.`;
+  }
+
+  // --- defence
+  if (f.stoppedMate) return `Thấy nguy, ${side} vội đưa ${nick} ${into} ${f.to}, chặn đứng đòn ${f.stoppedMate}!`;
+  if (tags.has('escape') && f.piece !== 'p') {
+    return f.piece === 'r' && f.retreat
+      ? `Thấy nguy, ${side} cho xe tăng cài số lùi về ${f.to}.`
+      : `Thấy nguy, ${side} vội đưa ${nick} ${into} ${f.to} lánh nạn.`;
+  }
+  if (tags.has('protect') && f.protected && f.protected !== 'p')
+    return `Thấy nguy, ${side} đưa ${nick} ${into} ${f.to} che chắn cho ${NICK[f.protected]}.`;
+
+  // --- building the attack
+  if (f.mateThreat) return `${opener} đem ${nick} ${into} ${f.to} rình rập — lưỡi dao đã kề cổ, dọa ${f.mateThreat}!`;
+  if (f.pin?.kind === 'skewer') return `${opener} dùng ${nick} xiên thẳng ${f.pin.front} — né thì ${f.pin.back} phía sau mất mạng!`;
+  if (f.piece === 'b' && (f.pin || f.threat))
+    return `${opener} đưa voi chiến ${into} ${f.to}, chảy nước miếng nhìn ${f.pin ? f.pin.front : f.threat}.`;
+  if (ctx.winAfter >= 97 && !f.check && strong) return pick(`${side} rung đùi chờ ${opp} quit game.`, `Thắng thế quá rõ, ${side} chỉ việc rung đùi chờ ${opp} quit game.`);
+  if (f.pin) return `${opener} ghim chặt ${f.pin.front} vào ${f.pin.back} — ${opp} bị trói tay trói chân.`;
+  if (strong && cls !== 'excellent' && !f.check && TACTICAL.some((t) => f.followTags.has(t)))
+    return `${side} âm thầm chuẩn bị một mưu đồ đen tối… (nhắm tới ${f.followSan})`;
+  if (f.piece === 'r' && f.lateral) return `${opener} xuất chiêu youtuber lái wave tàu — xe tăng lướt ngang sang ${f.to}!`;
+  if (f.piece === 'r' && f.retreat && f.ranks >= 2) return `${side} cho xe tăng cài số lùi về ${f.to}.`;
+  if (f.piece === 'r' && f.forward && f.ranks >= 2) return `La hán đẩy xe bò — ${side} cho xe tăng tiến thẳng lên ${f.to}!`;
+  if (f.threat && f.forward && f.piece !== 'p') return `${opener} đem ${nick} ${into} ${f.to} rình rập ${f.threat}.`;
+
+  // --- everyday moves
+  if (tags.has('castleShort')) return `${side} nhập thành, đưa Thượng đế vào hầm trú ẩn.`;
+  if (tags.has('castleLong')) return `${side} nhập thành dài — Thượng đế sang cánh Hậu, sẵn sàng đấu khô máu!`;
+  if (tags.has('enPassant')) return `${side} bắt Tốt qua đường — đòn hiểm ít ai ngờ tới!`;
+  if (cls === 'brilliant') return 'Thế này mới gọi là thiên tài!';
+  if (cls === 'great') return `Nước duy nhất — ${side} đi trên dây mà không ngã!`;
+  return null;
 }
+

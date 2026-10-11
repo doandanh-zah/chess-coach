@@ -383,6 +383,52 @@ button.primary.active {
   color: var(--muted);
 }
 
+/* review: running commentary */
+.story {
+  margin: 12px 0;
+}
+.story summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+.story-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+  margin-top: 8px;
+}
+.story-item {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 6px;
+  align-items: baseline;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: #2a2826;
+  font-size: 13px;
+  cursor: pointer;
+}
+.story-item:hover {
+  background: #34322f;
+}
+.story-item.cur {
+  background: #3a4a2c;
+}
+.story-item b {
+  white-space: nowrap;
+}
+.story-item .badge {
+  min-width: 18px;
+  height: 18px;
+  font-size: 10px;
+}
+.story-item span {
+  font-style: italic;
+  color: #d6e9b8;
+}
+
 /* accuracy */
 .accuracy {
   display: flex;

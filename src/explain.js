@@ -79,11 +79,17 @@ function lineTactics(chess, sq) {
     const worth = (x) => (x.type === 'k' ? 100 : VALUE[x.type]);
     if (front.type !== 'k' && worth(back) > worth(front) && front.type !== 'p') {
       out.push({
+        kind: 'pin',
+        front,
+        back,
         w: back.type === 'k' ? 70 : 55,
         text: `Ghim ${piece(front, front.square)} vào ${NAME[back.type]} — quân này ${back.type === 'k' ? 'không được phép' : 'khó'} di chuyển`,
       });
     } else if (worth(front) > worth(back) && back.type !== 'p' && VALUE[back.type] >= 3) {
       out.push({
+        kind: 'skewer',
+        front,
+        back,
         w: 65,
         text: `Đòn xiên: ${NAME[front.type]} phải tránh, để lộ ${piece(back, back.square)}`,
       });
@@ -157,6 +163,7 @@ function movesFor(chess, color) {
  * @param {{pv: string[], cp?: number, mate?: number}} line engine line starting with the move
  * @param {{max?: number, shallow?: boolean}} opts shallow: skip look-ahead ideas (used for PV steps)
  */
+// prevUci: the previous ply, only when it was a capture (to recognise recaptures).
 export function describeMove(fen, line, { max = 3, shallow = false, prevUci = null } = {}) {
   const uci = line.pv[0];
   const before = new Chess(fen);
@@ -175,6 +182,32 @@ export function describeMove(fen, line, { max = 3, shallow = false, prevUci = nu
   const tags = new Set();
   const add = (w, text) => reasons.push({ w, text });
   const myMat = material(before, me) - material(before, opp);
+  const relRank = (sq) => (me === 'w' ? +sq[1] : 9 - +sq[1]);
+  // Plain facts about the move, used to build the commentary sentences.
+  const facts = {
+    piece: move.piece,
+    from,
+    to,
+    san: move.san,
+    captured: move.captured ?? null,
+    promotion: move.promotion ?? null,
+    check: after.inCheck(),
+    forward: relRank(to) > relRank(from),
+    retreat: relRank(to) < relRank(from),
+    lateral: from[1] === to[1] && Math.abs(FILES.indexOf(from[0]) - FILES.indexOf(to[0])) >= 3,
+    ranks: Math.abs(+to[1] - +from[1]),
+    targets: [],
+    threat: null,
+    pin: null,
+    mateThreat: null,
+    stoppedMate: null,
+    followSan: null,
+    followTags: new Set(),
+    forcedTake: false,
+    hanging: isHanging(after, to),
+    inCheckBefore: before.inCheck(),
+    protected: null,
+  };
 
   // --- Game enders
   if (after.isCheckmate()) {
@@ -237,9 +270,15 @@ export function describeMove(fen, line, { max = 3, shallow = false, prevUci = nu
     add(78, `Thí quân (bỏ ${sac} điểm vật chất) để giành thế tấn công`);
     tags.add('sac');
     // Name the sacrifice after the most valuable piece left en prise.
-    const loose = pieces(after, me).filter((p) => p.type !== 'k' && isHanging(after, p.square));
+    const loose = pieces(after, me).filter(
+      (p) => p.type !== 'k' && isHanging(after, p.square) && (p.square === to || !isHanging(before, p.square)),
+    );
     const given = loose.sort((a, b) => VALUE[b.type] - VALUE[a.type])[0]?.type;
     if (given && 'qrbn'.includes(given)) tags.add(`sac${given.toUpperCase()}`);
+    const bait = loose.sort((a, b) => VALUE[b.type] - VALUE[a.type])[0];
+    const replies = after.moves({ verbose: true });
+    facts.forcedTake = !!bait && replies.length > 0 && replies.every((m) => m.to === bait.square);
+    facts.bait = bait ? { type: bait.type, square: bait.square } : null;
     const oppKing = pieces(before, opp).find((p) => p.type === 'k').square;
     const near = Math.max(Math.abs(FILES.indexOf(to[0]) - FILES.indexOf(oppKing[0])), Math.abs(+to[1] - +oppKing[1])) <= 1;
     if (near) tags.add('sacKingside');
@@ -256,22 +295,29 @@ export function describeMove(fen, line, { max = 3, shallow = false, prevUci = nu
   if (threats.length >= 2) {
     const names = threats.map((t) => (t.type === 'k' ? 'Vua' : piece(t, t.square))).join(' và ');
     add(88, `Đòn chĩa đôi: ${NAME[moved.type]} tấn công cùng lúc ${names}`);
+    facts.targets = threats.map((t) => (t.type === 'k' ? 'Vua' : piece(t, t.square)));
     tags.add(moved.type === 'n' ? 'knightFork' : moved.type === 'p' ? 'pawnFork' : 'fork');
     if (threats.some((t) => t.type === 'k') && threats.some((t) => t.type === 'q')) tags.add('royalFork');
   } else if (threats.length === 1 && threats[0].type !== 'k') {
     add(60, `Đe dọa ăn ${piece(threats[0], threats[0].square)}`);
+    facts.threat = piece(threats[0], threats[0].square);
     if (threats[0].type === 'q') tags.add('hitQueen');
   } else if (targetsOf(after, to).some((t) => t.type === 'p' && isHanging(after, t.square))) {
     const pawn = targetsOf(after, to).find((t) => t.type === 'p' && isHanging(after, t.square));
     add(33, `Tấn công Tốt ở ${pawn.square} đang không được bảo vệ`);
+    facts.threat = `Tốt ở ${pawn.square}`;
   } else if (lineTactics(after, to).length === 0) {
     const pressured = targetsOf(after, to).find((t) => t.type !== 'p' && t.type !== 'k');
-    if (pressured) add(20, `Gây áp lực lên ${piece(pressured, pressured.square)}`);
+    if (pressured) {
+      add(20, `Gây áp lực lên ${piece(pressured, pressured.square)}`);
+      facts.threat = piece(pressured, pressured.square);
+    }
   }
   if (!after.isGameOver() && !after.inCheck()) {
     const mateIn1 = mateThreat(after);
     if (mateIn1) {
       add(82, `Đe dọa chiếu hết bằng ${mateIn1}`);
+      facts.mateThreat = mateIn1;
       tags.add('mateThreat');
     }
   }
@@ -292,6 +338,7 @@ export function describeMove(fen, line, { max = 3, shallow = false, prevUci = nu
 
   for (const t of lineTactics(after, to)) {
     add(t.w, t.text);
+    facts.pin = { kind: t.kind, front: piece(t.front, t.front.square), back: NAME[t.back.type] };
     tags.add(t.text.startsWith('Ghim') ? (t.w >= 70 ? 'pinKing' : 'pin') : 'skewer');
   }
 
@@ -299,13 +346,19 @@ export function describeMove(fen, line, { max = 3, shallow = false, prevUci = nu
   const oppMateBefore = mateThreat(new Chess(`${before.fen().split(' ')[0]} ${me} - - 0 1`));
   if (oppMateBefore && !after.isGameOver() && !mateThreat(new Chess(after.fen().replace(/ [wb] /, ` ${me} `)))) {
     add(86, `Chặn đòn chiếu hết ${oppMateBefore} của đối phương`);
+    facts.stoppedMate = oppMateBefore;
     tags.add('stopMate');
   }
-  if (isHanging(before, from) && !isHanging(after, to)) add(58, `Đưa ${NAME[moved.type]} thoát khỏi chỗ bị tấn công`);
+  if (isHanging(before, from) && !isHanging(after, to)) {
+    add(58, `Đưa ${NAME[moved.type]} thoát khỏi chỗ bị tấn công`);
+    tags.add('escape');
+  }
   for (const p of pieces(before, me)) {
     if (p.square === from || !isHanging(before, p.square)) continue;
     if (after.get(p.square) && !isHanging(after, p.square)) {
       add(55, `Bảo vệ ${piece(p, p.square)} đang bị đe dọa`);
+      tags.add('protect');
+      facts.protected = p.type;
       break;
     }
   }
@@ -366,8 +419,14 @@ export function describeMove(fen, line, { max = 3, shallow = false, prevUci = nu
   if (!shallow && line.pv.length > 2 && !after.isGameOver()) {
     const sim = new Chess(after.fen());
     try {
-      sim.move(uciToMove(line.pv[1]));
-      const next = describeMove(sim.fen(), { pv: line.pv.slice(2) }, { max: 1, shallow: true, prevUci: line.pv[1] });
+      const reply = sim.move(uciToMove(line.pv[1]));
+      const next = describeMove(sim.fen(), { pv: line.pv.slice(2) }, {
+        max: 1,
+        shallow: true,
+        prevUci: reply.captured ? line.pv[1] : null,
+      });
+      facts.followSan = next.san;
+      facts.followTags = next.tags;
       const why = next.reasons[0];
       if (why && !/^(Nước củng cố|Tăng hoạt động)/.test(why))
         add(24, `Chuẩn bị ${next.san}: ${why.charAt(0).toLowerCase()}${why.slice(1)}`);
@@ -389,6 +448,7 @@ export function describeMove(fen, line, { max = 3, shallow = false, prevUci = nu
   return {
     san: move.san,
     tags,
+    facts,
     reasons: reasons
       .sort((a, b) => b.w - a.w)
       .filter((r, i, arr) => arr.findIndex((x) => x.text === r.text) === i)
@@ -416,16 +476,19 @@ export function explainMove(fen, line, opts) {
 export function walkthrough(fen, pv, plies = 6, prevUci = null) {
   const chess = new Chess(fen);
   const steps = [];
+  let lastCapture = null;
   for (let i = 0; i < Math.min(pv.length, plies); i++) {
     const pos = chess.fen();
     const no = chess.moveNumber();
     const color = chess.turn();
-    const d = describeMove(pos, { pv: pv.slice(i) }, { max: 1, shallow: true, prevUci: i ? pv[i - 1] : prevUci });
+    const d = describeMove(pos, { pv: pv.slice(i) }, { max: 1, shallow: true, prevUci: i ? lastCapture : prevUci });
+    let played;
     try {
-      chess.move(uciToMove(pv[i]));
+      played = chess.move(uciToMove(pv[i]));
     } catch {
       break;
     }
+    lastCapture = played.captured ? pv[i] : null;
     const why = d.reasons[0];
     steps.push({
       label: `${no}${color === 'w' ? '.' : '...'} ${d.san}`,
