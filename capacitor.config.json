@@ -1,0 +1,8 @@
+{
+  "appId": "space.thezah.chess",
+  "appName": "Chess Coach",
+  "webDir": "dist",
+  "android": {
+    "backgroundColor": "#302e2b"
+  }
+}

@@ -25,6 +25,16 @@ Build tĩnh: `npm run build` → thư mục `dist/` (host ở đâu cũng đư�
 - **✏️ Xếp cờ**: kéo/thả quân từ bảng vào bàn (hoặc chọn quân rồi bấm ô, 🗑 để xóa, kéo ra ngoài bàn để bỏ), chọn bên đi tiếp, hoặc dán FEN. Bấm *Xong* để phân tích và chơi tiếp từ thế đó. Quyền nhập thành được suy ra từ vị trí Vua/Xe.
 - Thanh đánh giá, độ chính xác từng bên, đi lại (`←`), lật bàn (`F`).
 
+## App Android (APK)
+
+Đóng gói bằng [Capacitor](https://capacitorjs.com) — chạy offline, Stockfish nằm sẵn trong app.
+
+```bash
+npm run android:apk
+```
+
+Cần JDK 17 và Android SDK (platform 34). APK ra ở `android/app/build/outputs/apk/debug/app-debug.apk`. Mở `android/` bằng Android Studio nếu muốn build bản release có ký.
+
 ## Cách chấm điểm (`src/classify.js`)
 
 Điểm centipawn được đổi sang **tỉ lệ thắng** (công thức của Lichess). Mức mất tỉ lệ thắng so với nước tốt nhất quyết định nhãn:
