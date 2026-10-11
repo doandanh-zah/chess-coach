@@ -157,7 +157,7 @@ function movesFor(chess, color) {
  * @param {{pv: string[], cp?: number, mate?: number}} line engine line starting with the move
  * @param {{max?: number, shallow?: boolean}} opts shallow: skip look-ahead ideas (used for PV steps)
  */
-export function describeMove(fen, line, { max = 3, shallow = false } = {}) {
+export function describeMove(fen, line, { max = 3, shallow = false, prevUci = null } = {}) {
   const uci = line.pv[0];
   const before = new Chess(fen);
   const me = before.turn();
@@ -197,6 +197,7 @@ export function describeMove(fen, line, { max = 3, shallow = false } = {}) {
     tags.add('stalemate');
   } else if (line.mate > 0) {
     add(95, `Mở ra đòn chiếu hết sau ${line.mate} nước nếu đi chính xác`);
+    if (line.mate <= 5) tags.add('matingNet');
   }
 
   if (move.isKingsideCastle() || move.isQueensideCastle()) {
@@ -211,7 +212,11 @@ export function describeMove(fen, line, { max = 3, shallow = false } = {}) {
   // --- Captures
   if (move.captured) {
     const loose = !before.attackers(to, opp).length || !after.attackers(to, opp).length;
-    if (move.isEnPassant()) {
+    const recapture = prevUci && prevUci.slice(2, 4) === to;
+    if (recapture && !move.isEnPassant()) {
+      add(50, `Ăn lại ${NAME[move.captured]}, giữ cân bằng vật chất`);
+      tags.add('recapture');
+    } else if (move.isEnPassant()) {
       add(40, 'Bắt Tốt qua đường');
       tags.add('enPassant');
     } else if (loose) {
@@ -230,7 +235,14 @@ export function describeMove(fen, line, { max = 3, shallow = false } = {}) {
   const sac = sacrificedMaterial(fen, uci);
   if (sac >= 2) {
     add(78, `Thí quân (bỏ ${sac} điểm vật chất) để giành thế tấn công`);
-    tags.add(sac >= 8 ? 'queenSac' : 'sacrifice');
+    tags.add('sac');
+    // Name the sacrifice after the most valuable piece left en prise.
+    const loose = pieces(after, me).filter((p) => p.type !== 'k' && isHanging(after, p.square));
+    const given = loose.sort((a, b) => VALUE[b.type] - VALUE[a.type])[0]?.type;
+    if (given && 'qrbn'.includes(given)) tags.add(`sac${given.toUpperCase()}`);
+    const oppKing = pieces(before, opp).find((p) => p.type === 'k').square;
+    const near = Math.max(Math.abs(FILES.indexOf(to[0]) - FILES.indexOf(oppKing[0])), Math.abs(+to[1] - +oppKing[1])) <= 1;
+    if (near) tags.add('sacKingside');
   }
 
   // --- Checks, threats, forks
@@ -355,7 +367,7 @@ export function describeMove(fen, line, { max = 3, shallow = false } = {}) {
     const sim = new Chess(after.fen());
     try {
       sim.move(uciToMove(line.pv[1]));
-      const next = describeMove(sim.fen(), { pv: line.pv.slice(2) }, { max: 1, shallow: true });
+      const next = describeMove(sim.fen(), { pv: line.pv.slice(2) }, { max: 1, shallow: true, prevUci: line.pv[1] });
       const why = next.reasons[0];
       if (why && !/^(Nước củng cố|Tăng hoạt động)/.test(why))
         add(24, `Chuẩn bị ${next.san}: ${why.charAt(0).toLowerCase()}${why.slice(1)}`);
@@ -401,14 +413,14 @@ export function explainMove(fen, line, opts) {
  * Step through the engine line: each ply with its move number and one short
  * reason, so the player can see how the idea unfolds.
  */
-export function walkthrough(fen, pv, plies = 6) {
+export function walkthrough(fen, pv, plies = 6, prevUci = null) {
   const chess = new Chess(fen);
   const steps = [];
   for (let i = 0; i < Math.min(pv.length, plies); i++) {
     const pos = chess.fen();
     const no = chess.moveNumber();
     const color = chess.turn();
-    const d = describeMove(pos, { pv: pv.slice(i) }, { max: 1, shallow: true });
+    const d = describeMove(pos, { pv: pv.slice(i) }, { max: 1, shallow: true, prevUci: i ? pv[i - 1] : prevUci });
     try {
       chess.move(uciToMove(pv[i]));
     } catch {

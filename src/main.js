@@ -202,12 +202,12 @@ async function analyzeCurrent() {
   if (!a || current() !== entry) return;
   entry.analysis = a;
   entry.candidates = classifyCandidates(entry.fen, a).map((c, i) => {
-    const d = describeMove(entry.fen, c.line, { max: i === 0 ? 3 : 2 });
+    const d = describeMove(entry.fen, c.line, { max: i === 0 ? 3 : 2, prevUci: entry.uci });
     return {
       ...c,
       reasons: d.reasons,
-      plan: walkthrough(entry.fen, c.line.pv),
-      banter: banterFor(d.tags, c.cls, entry.fen + c.uci),
+      plan: walkthrough(entry.fen, c.line.pv, 6, entry.uci),
+      banter: banterFor(contextTags(history.length, entry.fen, d, c.line), c.cls, entry.fen + c.uci, banterVars(entry.fen, history.length, c.uci, c.line.mate)),
     };
   });
   renderAll();
@@ -238,22 +238,65 @@ async function gradeMove(entry, depth = settings.depth) {
     (reply
       ? { pv: [entry.uci, ...reply.pv], cp: reply.cp === undefined ? undefined : -reply.cp, mate: reply.mate === undefined ? undefined : -reply.mate }
       : { pv: [entry.uci] });
-  const d = describeMove(prev.fen, own);
+  const d = describeMove(prev.fen, own, { prevUci: prev.uci });
   r.reasons = d.reasons;
-  r.plan = walkthrough(prev.fen, own.pv);
-  r.banter = banterFor(d.tags, r.cls, prev.fen + entry.uci);
+  r.plan = walkthrough(prev.fen, own.pv, 6, prev.uci);
+  entry.tags = d.tags;
+  r.banter = banterFor(
+    contextTags(idx, prev.fen, d, own, before.lines[0]),
+    r.cls,
+    prev.fen + entry.uci,
+    banterVars(prev.fen, idx, entry.uci, own.mate),
+  );
   if (!r.isTop) {
-    r.bestReasons = explainMove(prev.fen, before.lines[0], { max: 2 });
-    r.bestPlan = walkthrough(prev.fen, before.lines[0].pv);
+    r.bestReasons = explainMove(prev.fen, before.lines[0], { max: 2, prevUci: prev.uci });
+    r.bestPlan = walkthrough(prev.fen, before.lines[0].pv, 6, prev.uci);
   }
   if (['inaccuracy', 'mistake', 'blunder'].includes(r.cls) && own.pv.length > 1) {
     const refute = replyLine(own);
     r.refutationSan = uciToSan(entry.fen, refute.pv[0]);
-    r.refutation = explainMove(entry.fen, refute, { max: 2 });
-    r.refutationPlan = walkthrough(entry.fen, refute.pv);
+    r.refutation = explainMove(entry.fen, refute, { max: 2, prevUci: entry.uci });
+    r.refutationPlan = walkthrough(entry.fen, refute.pv, 6, entry.uci);
   }
   entry.result = r;
   renderAll();
+}
+
+// ---------- commentary context ----------
+/**
+ * Events that depend on the game so far, not just one move: chasing the king
+ * with repeated checks, back-to-back sacrifices, turning a lost game around,
+ * missing a mate, a long game ending in mate.
+ * @param {number} ply history index the move lands on
+ */
+function contextTags(ply, fen, d, line, bestBefore) {
+  const tags = new Set(d.tags);
+  // Giving up material while already lost is desperation, not a sacrifice.
+  if (winPct(line) < 40) for (const t of [...tags]) if (t.startsWith('sac')) tags.delete(t);
+  const color = fen.split(' ')[1];
+  const earlier = history.slice(1, ply);
+  const mine = earlier.filter((h) => h.color === color).slice(-2);
+  const checking = d.san.endsWith('+') || d.san.endsWith('#');
+  if (checking && mine.length === 2 && mine.every((h) => /[+#]$/.test(h.san))) tags.add('chaseKing');
+  if (d.tags.has('sac') && mine.some((h) => h.tags?.has('sac'))) tags.add('comboSac');
+  if (d.tags.has('mate') && ply >= 60) tags.add('longFinish');
+  if (bestBefore?.mate > 0 && !(line.mate > 0) && !d.tags.has('mate')) tags.add('missedMate');
+  const theirs = earlier[earlier.length - 1];
+  const r = theirs?.result;
+  if (r && ['blunder', 'mistake'].includes(r.cls) && 100 - r.winBefore <= 40 && 100 - r.winAfter >= 60) tags.add('turnaround');
+  return tags;
+}
+
+function banterVars(fen, ply, uci, mate) {
+  const color = fen.split(' ')[1];
+  const PROMO = { q: 'Hậu', r: 'Xe', b: 'Tượng', n: 'Mã' };
+  return {
+    side: color === 'w' ? 'Trắng' : 'Đen',
+    opp: color === 'w' ? 'Đen' : 'Trắng',
+    moves: Math.ceil(ply / 2),
+    promo: PROMO[uci[4]] ?? '',
+    mate: mate > 0 ? mate : '',
+  };
 }
 
 // ---------- moves ----------
