@@ -17,6 +17,7 @@ import {
 } from './classify.js';
 import { describeMove, explainMove, replyLine, walkthrough } from './explain.js';
 import { commentate } from './banter.js';
+import { openingAt } from './openings.js';
 
 const ENGINE_URL = '/engine/stockfish-19-lite-single.js';
 const $ = (id) => document.getElementById(id);
@@ -58,6 +59,7 @@ let hintsVisible = settings.autoHint;
 let hoveredHint = null;
 let liveInfo = null; // latest engine info for the current position
 let startFen = DEFAULT_POSITION;
+let players = null; // { w, b } names from a loaded PGN, if any
 let editing = false;
 let editTool = null; // { role, color } | 'trash' | null (null = move pieces)
 let reviewing = false;
@@ -207,7 +209,7 @@ async function analyzeCurrent() {
       ...c,
       reasons: d.reasons,
       plan: walkthrough(entry.fen, c.line.pv, 6, lastCaptureUci(entry)),
-      banter: commentate(commentaryContext(history.length, entry.fen, d, c.line, c.cls)),
+      banter: commentate(commentaryContext(history.length, entry.fen, d, c.line, c.cls, null, null, { short: true })),
     };
   });
   renderAll();
@@ -245,11 +247,9 @@ async function gradeMove(entry, depth = settings.depth) {
   entry.tags = d.tags;
   entry.facts = d.facts;
   entry.result = r; // the commentary below reads this entry's neighbours
-  if (['inaccuracy', 'mistake', 'blunder'].includes(r.cls) && own.pv.length > 1)
-    r.refutationSan = uciToSan(entry.fen, own.pv[1]);
-  const cctx = commentaryContext(idx, prev.fen, d, own, r.cls, before.lines[0], r);
-  entry.ctxTags = cctx.tags;
-  r.banter = commentate(cctx);
+  if (['inaccuracy', 'mistake', 'blunder'].includes(r.cls) && own.pv.length > 1) r.refutationSan = uciToSan(entry.fen, own.pv[1]);
+  entry.commentInputs = { d, own, bestLine: before.lines[0] };
+  commentOn(entry);
   if (!r.isTop) {
     r.bestReasons = explainMove(prev.fen, before.lines[0], { max: 2, prevUci: lastCaptureUci(prev) });
     r.bestPlan = walkthrough(prev.fen, before.lines[0].pv, 6, lastCaptureUci(prev));
@@ -296,8 +296,58 @@ function contextTags(ply, fen, d, line, bestBefore) {
   return tags;
 }
 
+/** How the commentator calls each side: player names from a PGN, "Bạn"/"Máy", or Trắng/Đen. */
+function sideNames() {
+  if (players) return players;
+  if (settings.mode === 'bot') {
+    const you = settings.color === 'white' ? 'w' : 'b';
+    return you === 'w' ? { w: 'Bạn', b: 'Máy' } : { w: 'Máy', b: 'Bạn' };
+  }
+  return { w: 'Trắng', b: 'Đen' };
+}
+
+/** "Nakamura, Hikaru" -> "Nakamura"; short names are kept whole. */
+function shortName(name) {
+  if (!name || name === '?') return null;
+  if (name.includes(',')) return name.split(',')[0].trim();
+  const words = name.trim().split(/\s+/);
+  return words.length <= 2 ? name.trim() : words[words.length - 1];
+}
+
+/** Opening name if the game so far (from the standard start) completes a known line. */
+function openingFor(ply, uci) {
+  if (history[0].fen !== DEFAULT_POSITION) return null;
+  const sans = history.slice(1, ply).map((h) => h.san);
+  const chess = new Chess(history[ply - 1].fen);
+  try {
+    sans.push(chess.move(uciToMove(uci)).san);
+  } catch {
+    return null;
+  }
+  return openingAt(sans);
+}
+
+/**
+ * (Re)write the commentary for a graded move. It reads the moves around it, so
+ * after a whole game is graded (in any order) it is re-run front to back.
+ */
+function commentOn(entry) {
+  const idx = history.indexOf(entry);
+  const r = entry.result;
+  if (idx < 1 || !r || !entry.commentInputs) return;
+  const { d, own, bestLine } = entry.commentInputs;
+  const weak = ['inaccuracy', 'mistake', 'blunder'].includes(r.cls);
+  const cctx = commentaryContext(idx, history[idx - 1].fen, d, own, r.cls, bestLine, r, {
+    refutationPv: weak ? own.pv.slice(1) : null,
+    bestPv: r.isTop ? null : bestLine.pv,
+    nextUci: history[idx + 1]?.uci,
+  });
+  entry.ctxTags = cctx.tags;
+  r.banter = commentate(cctx);
+}
+
 /** Everything the commentator needs about a move and the game around it. */
-function commentaryContext(ply, fen, d, line, cls, bestBefore, result) {
+function commentaryContext(ply, fen, d, line, cls, bestBefore, result, extra = {}) {
   const color = fen.split(' ')[1];
   const earlier = history.slice(1, ply);
   const theirs = earlier.filter((h) => h.color !== color).slice(-3);
@@ -307,13 +357,17 @@ function commentaryContext(ply, fen, d, line, cls, bestBefore, result) {
     tags: contextTags(ply, fen, d, line, bestBefore),
     cls,
     color,
+    names: sideNames(),
     prev: prev && prev.color !== color ? { cls: prev.result?.cls, tags: prev.ctxTags ?? prev.tags, facts: prev.facts } : null,
     oppBad: theirs.filter((h) => ['inaccuracy', 'mistake', 'blunder'].includes(h.result?.cls)).length,
     winAfter: result ? result.winAfter : winPct(line),
-    refutation: result?.refutationSan,
+    fen,
+    pv: line.pv,
     mate: line.mate > 0 ? line.mate : undefined,
-    moves: Math.ceil(ply / 2),
+    ply,
+    opening: openingFor(ply, line.pv[0]),
     seed: fen + line.pv[0],
+    ...extra,
   };
 }
 
@@ -699,6 +753,7 @@ $('btnHint').onclick = toggleHints;
 $('btnUndo').onclick = undo;
 $('btnNew').onclick = () => {
   startFen = DEFAULT_POSITION;
+  players = null;
   restart();
 };
 $('btnEdit').onclick = enterEditor;
@@ -966,6 +1021,7 @@ function finishEditor() {
     return;
   }
   startFen = new Chess(fen).fen();
+  players = null;
   exitEditor();
   restart();
   hintsVisible = true;
@@ -1062,6 +1118,8 @@ async function runReview(depth) {
   );
   await Promise.all(items.slice(1).map((h) => gradeMove(h, depth)));
   if (run !== reviewRun) return;
+  // Moves were graded in parallel; tell the story again in order now that every move is known.
+  for (const h of history.slice(1)) commentOn(h);
   reviewProgress = null;
   renderAll();
 }
@@ -1176,6 +1234,10 @@ function loadPgn(text) {
     return `Không đọc được PGN: ${err.message}`;
   }
   const moves = game.history({ verbose: true });
+  const headers = game.getHeaders();
+  const w = shortName(headers.White);
+  const b = shortName(headers.Black);
+  players = w && b ? { w, b } : null;
   if (!moves.length) return 'PGN không có nước đi nào.';
   bot.stopAll();
   startFen = moves[0].before;

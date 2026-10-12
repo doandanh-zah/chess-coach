@@ -207,7 +207,26 @@ export function describeMove(fen, line, { max = 3, shallow = false, prevUci = nu
     hanging: isHanging(after, to),
     inCheckBefore: before.inCheck(),
     protected: null,
+    sameRank: from[1] === to[1],
+    develop: 'nb'.includes(move.piece) && relRank(from) === 1,
+    // structured versions of the targets, for the commentary ({ type, square })
+    threatOn: null,
+    forkOn: [],
+    opened: null,
+    tradeOffer: null,
+    weakPoint: null,
+    blocksCheck: before.inCheck() && move.piece !== 'k' && !move.captured,
   };
+  // The classic weak points next to the uncastled king (f7 / f2).
+  const weakSq = me === 'w' ? 'f7' : 'f2';
+  const hitsWeak = after.attackers(weakSq, me);
+  if (hitsWeak.includes(to) && hitsWeak.length >= 2 && after.get(weakSq)?.color === opp) facts.weakPoint = weakSq;
+  // Attacking an equal piece that is defended: an offer to trade.
+  for (const t of targetsOf(after, to)) {
+    if (t.type === moved.type && t.type !== 'p' && t.type !== 'k' && after.attackers(t.square, opp).length) {
+      facts.tradeOffer = { type: t.type, square: t.square };
+    }
+  }
 
   // --- Game enders
   if (after.isCheckmate()) {
@@ -296,21 +315,25 @@ export function describeMove(fen, line, { max = 3, shallow = false, prevUci = nu
     const names = threats.map((t) => (t.type === 'k' ? 'Vua' : piece(t, t.square))).join(' và ');
     add(88, `Đòn chĩa đôi: ${NAME[moved.type]} tấn công cùng lúc ${names}`);
     facts.targets = threats.map((t) => (t.type === 'k' ? 'Vua' : piece(t, t.square)));
+    facts.forkOn = threats.map((t) => ({ type: t.type, square: t.square }));
     tags.add(moved.type === 'n' ? 'knightFork' : moved.type === 'p' ? 'pawnFork' : 'fork');
     if (threats.some((t) => t.type === 'k') && threats.some((t) => t.type === 'q')) tags.add('royalFork');
   } else if (threats.length === 1 && threats[0].type !== 'k') {
     add(60, `Đe dọa ăn ${piece(threats[0], threats[0].square)}`);
     facts.threat = piece(threats[0], threats[0].square);
+    facts.threatOn = { type: threats[0].type, square: threats[0].square };
     if (threats[0].type === 'q') tags.add('hitQueen');
   } else if (targetsOf(after, to).some((t) => t.type === 'p' && isHanging(after, t.square))) {
     const pawn = targetsOf(after, to).find((t) => t.type === 'p' && isHanging(after, t.square));
     add(33, `Tấn công Tốt ở ${pawn.square} đang không được bảo vệ`);
     facts.threat = `Tốt ở ${pawn.square}`;
+    facts.threatOn = { type: 'p', square: pawn.square };
   } else if (lineTactics(after, to).length === 0) {
     const pressured = targetsOf(after, to).find((t) => t.type !== 'p' && t.type !== 'k');
     if (pressured) {
       add(20, `Gây áp lực lên ${piece(pressured, pressured.square)}`);
       facts.threat = piece(pressured, pressured.square);
+      facts.threatOn = { type: pressured.type, square: pressured.square, mild: true };
     }
   }
   if (!after.isGameOver() && !after.inCheck()) {
@@ -331,6 +354,7 @@ export function describeMove(fen, line, { max = 3, shallow = false, prevUci = nu
     if (newHits.length && (t.type === 'k' || isHanging(after, t.square))) {
       const by = after.get(newHits[0]);
       add(t.type === 'k' ? 72 : 62, `Mở đường cho ${NAME[by.type]} ${t.type === 'k' ? 'chiếu Vua' : `tấn công ${piece(t, t.square)}`}`);
+      facts.opened = { by: by.type, type: t.type, square: t.square };
       tags.add(t.type === 'k' ? 'discoveredCheck' : 'discovered');
       break;
     }
@@ -338,7 +362,13 @@ export function describeMove(fen, line, { max = 3, shallow = false, prevUci = nu
 
   for (const t of lineTactics(after, to)) {
     add(t.w, t.text);
-    facts.pin = { kind: t.kind, front: piece(t.front, t.front.square), back: NAME[t.back.type] };
+    facts.pin = {
+      kind: t.kind,
+      front: piece(t.front, t.front.square),
+      back: NAME[t.back.type],
+      frontOn: { type: t.front.type, square: t.front.square },
+      backType: t.back.type,
+    };
     tags.add(t.text.startsWith('Ghim') ? (t.w >= 70 ? 'pinKing' : 'pin') : 'skewer');
   }
 
