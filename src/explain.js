@@ -17,7 +17,7 @@ DIRS.q = [...DIRS.b, ...DIRS.r];
 const other = (c) => (c === 'w' ? 'b' : 'w');
 const piece = (p, sq) => `${NAME[p.type]} ở ${sq}`;
 
-function pieces(chess, color) {
+export function pieces(chess, color) {
   const out = [];
   for (const row of chess.board()) for (const sq of row) if (sq && (!color || sq.color === color)) out.push(sq);
   return out;
@@ -28,7 +28,7 @@ function material(chess, color) {
 }
 
 /** Can `color` win the piece on `sq` (undefended, or attacked by something cheaper)? */
-function isHanging(chess, sq) {
+export function isHanging(chess, sq) {
   const p = chess.get(sq);
   if (!p || p.type === 'k') return false;
   const attackers = chess.attackers(sq, other(p.color));
@@ -57,7 +57,7 @@ function mobility(chess, from) {
 }
 
 /** Pins and skewers created by a slider standing on `sq`. */
-function lineTactics(chess, sq) {
+export function lineTactics(chess, sq) {
   const p = chess.get(sq);
   if (!DIRS[p.type]) return [];
   const out = [];
@@ -99,7 +99,7 @@ function lineTactics(chess, sq) {
 }
 
 /** If the mover could move again right now, which move would mate? */
-function mateThreat(chess) {
+export function mateThreat(chess) {
   const [board, turn, castling] = chess.fen().split(' ');
   let probe;
   try {
@@ -117,7 +117,7 @@ function mateThreat(chess) {
   return null;
 }
 
-function isPassed(chess, sq, color) {
+export function isPassed(chess, sq, color) {
   const f = FILES.indexOf(sq[0]);
   const r = +sq[1];
   const ahead = color === 'w' ? (rr) => rr > r : (rr) => rr < r;

@@ -1,27 +1,33 @@
 // "Bình luận vui": play-by-play commentary in the voice of Vietnamese chess
-// YouTube. Every move is narrated like a live broadcast:
+// YouTube. Each move gets one plain, accurate sentence — who moves what where
+// and why — tied to what just happened on the board:
 //
-//   [connector]  [actor] [piece verb + square] [purpose], [flourish]. [What if…]
-//   "Chỉ chờ có thế, Trắng nhảy mã G5 nhắm vào điểm yếu F7."
-//   "Tưởng Trắng hớ hênh, Đen nhanh chóng ăn tượng vào tốt A6, mồm kêu mình xin."
-//   "Nếu Đen tham ăn thì Trắng sẽ ăn hậu vào tốt F7 chiếu, Đen chạy vua sang D8…"
+//   "Trắng thúc tốt tiến xuống H6 bắt tượng."
+//   "Đen chạy tượng lên F6 né đòn."
+//   "Chưa dừng lại ở đó, Đen phi tượng lên E6 tiếp tục truy sát hậu."
+//   "Biết rằng quân tốt này có tẩm thuốc độc nên Đen không dám ăn uống linh tinh…"
+//   "Nếu mà Đen tưởng ngon ăn hậu lên B5 thì Trắng sẽ ăn xe D8 chiếu hết."
 //
-// Phrases are original lines written in that style (plus the catchphrases the
-// channel is known for). Edit freely.
+// Catchphrases are kept for the moments that earn them (sacrifices, blunders,
+// mates, promotions); ordinary moves are narrated straight. Edit freely.
 
 import { Chess } from 'chess.js';
-import { describeMove } from './explain.js';
-import { uciToMove } from './classify.js';
+import { uciToMove, winPct } from './classify.js';
+import { pieces, isHanging, lineTactics, mateThreat, isPassed } from './explain.js';
 
 const PW = { k: 'vua', q: 'hậu', r: 'xe', b: 'tượng', n: 'mã', p: 'tốt' };
 const WORTH = { k: 100, q: 9, r: 5, b: 3, n: 3, p: 1 };
 const STRONG = new Set(['brilliant', 'great', 'best', 'excellent']);
 const BAD = new Set(['blunder', 'mistake', 'inaccuracy']);
-const TACTICAL = ['mate', 'matingNet', 'sac', 'knightFork', 'fork', 'royalFork', 'pawnFork', 'freeQueen', 'mateThreat', 'discoveredCheck', 'skewer', 'pinKing', 'promoteQueen'];
+const FILES = 'abcdefgh';
+const CENTER = ['d4', 'e4', 'd5', 'e5'];
 
+const other = (c) => (c === 'w' ? 'b' : 'w');
 const SQ = (s) => s.toUpperCase();
-const term = (t) => `${PW[t.type]} ${SQ(t.square)}`;
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+/** "tượng" for pieces, "tốt C5" for pawns (there are many of them). */
+const nameOf = (t) => (t.type === 'p' ? `tốt ${SQ(t.square)}` : PW[t.type]);
+const named = (t) => `${PW[t.type]} ${SQ(t.square)}`;
 
 function hash(str) {
   let h = 0;
@@ -33,294 +39,720 @@ function picker(seed) {
   let n = 0;
   return (...options) => options[hash(`${seed}|${n++}`) % options.length];
 }
+const first = (a) => a;
 
-/** "nhảy mã F3", "kéo tượng lui về F1", "ăn hậu vào xe D8", "lắc xe qua D8"… */
-function action(f, tags, pick, plain = false) {
-  if (plain) pick = (first) => first;
-  const P = PW[f.piece];
-  const S = SQ(f.to);
-  const dir = f.forward ? 'lên' : f.retreat ? 'về' : 'sang';
-  if (tags.has('castleShort')) return 'nhập thành';
-  if (tags.has('castleLong')) return 'nhập thành dài';
-  if (f.promotion) return `${f.captured ? 'ăn' : 'đẩy'} tốt ${f.captured ? 'sang' : 'lên'} ${S} phong ${PW[f.promotion]}`;
-  if (f.captured) {
-    const C = PW[f.captured];
-    if (f.piece === 'p') return `ăn tốt sang ${S}`;
-    if (f.piece === 'k') return `ăn vua ${dir} ${S}`;
-    return pick(`ăn ${P} vào ${C} ${S}`, `ăn ${P} vào ${C} ${S}`, `phang thẳng ${P} vào ${C} ${S}`);
-  }
-  switch (f.piece) {
-    case 'p':
-      return pick(`đẩy tốt ${S}`, `tiến tốt ${dir} ${S}`);
-    case 'n':
-      if (f.retreat) return `lùi mã về ${S}`;
-      if (f.develop) return pick(`phát triển mã lên ${S}`, `nhảy mã ${S}`);
-      return pick(`nhảy mã ${S}`, `tung mã ${dir} ${S}`);
-    case 'b':
-      if (f.retreat) return `kéo tượng lui về ${S}`;
-      if (f.develop) return `triển khai tượng lên ${S}`;
-      return pick(`phi tượng ${dir} ${S}`, `đưa tượng ${dir} ${S}`);
-    case 'q':
-      if (f.retreat) return pick(`kéo hậu lui về ${S}`, `giật hậu về ${S}`);
-      return f.forward ? `phi hậu lên ${S}` : `chạy hậu sang ${S}`;
-    case 'r':
-      if (f.sameRank) return pick(`lắc xe qua ${S}`, `đưa xe sang ${S}`);
-      if (f.forward && f.check) return `lao thẳng xe xuống ${S}`;
-      return f.forward ? pick(`đẩy xe lên ${S}`, `lao thẳng xe xuống ${S}`) : `kéo xe lui về ${S}`;
-    case 'k':
-      return pick(`chạy vua ${dir} ${S}`, `kéo vua ${dir} ${S}`);
-  }
-  return `đi ${f.san}`;
+const material = (chess, color) =>
+  pieces(chess, color).reduce((s, p) => s + (p.type === 'k' ? 0 : WORTH[p.type]), 0);
+
+/** Squares the piece on `sq` attacks. */
+function reach(chess, sq) {
+  const me = chess.get(sq).color;
+  const out = [];
+  for (const f of FILES) for (let r = 1; r <= 8; r++) if (chess.attackers(f + r, me).includes(sq)) out.push(f + r);
+  return out;
 }
 
-/** Why the move is played, in commentator words: "nhắm vào điểm yếu F7", "chiếu bắt xe"… */
-function purpose(f, tags, opening, color) {
-  const parts = [];
-  if (tags.has('mate')) return '';
-  if (f.check) {
-    const extra = f.forkOn.find((t) => t.type !== 'k');
-    if (extra) parts.push(`chiếu bắt ${PW[extra.type]}`);
-    else if (tags.has('discoveredCheck')) parts.push('chiếu trộm');
-    else if (tags.has('chaseKing')) parts.push('chiếu bồi');
-    else parts.push('chiếu');
-  } else if (f.blocksCheck) parts.push('cản chiếu');
+/** Defenders of `sq` for `color`, not counting the king. */
+const guardsOf = (chess, sq, color) => chess.attackers(sq, color).filter((a) => chess.get(a).type !== 'k').length;
 
-  if (f.stoppedMate) parts.push('chặn đứng đòn chiếu hết');
-  else if (!f.check && f.forkOn.length >= 2) parts.push(`chĩa đôi ${f.forkOn.map(term).join(' và ')}`);
-  else if (f.pin?.kind === 'pin') parts.push(`tung đòn ghim khống chế ${term(f.pin.frontOn)}`);
-  else if (f.pin) parts.push(`xiên thẳng vào ${term(f.pin.frontOn)}`);
-  else if (f.mateThreat) parts.push(f.weakPoint ? `nhắm vào điểm yếu ${SQ(f.weakPoint)}` : 'dọa chiếu hết');
-  else if (f.weakPoint) parts.push(`nhắm vào điểm yếu ${SQ(f.weakPoint)}`);
-  else if (f.tradeOffer && !f.captured) parts.push(`gạ đổi ${PW[f.tradeOffer.type]}`);
-  else if (f.threatOn && !f.check && !f.captured) {
-    const t = f.threatOn;
-    if (!t.mild) parts.push(`${WORTH[f.piece] < WORTH[t.type] ? 'đuổi' : 'tấn công'} ${t.type === 'p' ? term(t) : PW[t.type]}`);
-    else if (f.piece === 'q' || f.piece === 'r') parts.push(`rình rập ${term(t)}`);
-  } else if (f.threatOn && f.captured && !f.check && !f.threatOn.mild) parts.push(`bắt ${PW[f.threatOn.type]}`);
-
-  if (f.opened && parts.length < 2) parts.push(`mở đường cho ${PW[f.opened.by]} tấn công ${PW[f.opened.type]}`);
-  if (!parts.length && f.protected) parts.push(`bảo vệ ${PW[f.protected]}`);
-  if (!parts.length && (tags.has('castleShort') || tags.has('castleLong'))) parts.push('đưa vua vào nơi an toàn');
-  if (!parts.length && (f.followTags.has('castleShort') || f.followTags.has('castleLong'))) parts.push('chuẩn bị nhập thành');
-  if (!parts.length && f.piece === 'p' && ['d4', 'e4', 'd5', 'e5'].includes(f.to)) parts.push('chiếm trung tâm');
-  const out = parts.slice(0, 2);
-  if (opening) out.push(color === 'w' ? `sử dụng ${opening}` : `chọn ${opening}`);
-  return out.join(', ');
-}
-
-function describe(fen, pv, prevUci, pick) {
-  const d = describeMove(fen, { pv }, { max: 1, shallow: true, prevUci });
-  const why = purpose(d.facts, d.tags, null, fen.split(' ')[1]);
-  return { d, text: `${action(d.facts, d.tags, pick)}${why ? ` ${why}` : ''}` };
+/** Has `color` castled (king tucked on the wing of its back rank)? */
+function castled(chess, color) {
+  const k = pieces(chess, color).find((p) => p.type === 'k');
+  return !!k && k.square[1] === (color === 'w' ? '1' : '8') && 'bcgh'.includes(k.square[0]);
 }
 
 /**
- * Tell a line of moves as a story: "Đen sẽ ăn tượng vào mã C6 chiếu, Trắng chạy vua sang D1
- * thì Đen sẽ ăn hậu sang C2 chiếu bồi… và cờ trắng sẽ toang".
+ * Everything the narrator needs to know about one move, worked out from the
+ * board itself so every claim ("bắt xe", "né đòn", "bảo vệ tốt E4") is true.
  */
-function storyOf(fen, pv, names, pick, plies = 4) {
-  const chess = new Chess(fen);
-  const first = chess.turn();
-  const countFor = (c) =>
-    chess.board().flat().filter((p) => p && p.color === c).reduce((s, p) => s + (p.type === 'k' ? 0 : WORTH[p.type]), 0);
-  const balance = () => countFor(first) - countFor(first === 'w' ? 'b' : 'w');
-  const start = balance();
-  let prevUci = null;
-  let text = '';
-  for (let i = 0; i < Math.min(pv.length, plies); i++) {
-    const color = chess.turn();
-    const { text: t } = describe(chess.fen(), pv.slice(i), prevUci, pick);
-    let m;
-    try {
-      m = chess.move(uciToMove(pv[i]));
-    } catch {
+function inspect(fen, uci) {
+  const before = new Chess(fen);
+  const after = new Chess(fen);
+  let mv;
+  try {
+    mv = after.move(uciToMove(uci));
+  } catch {
+    return null;
+  }
+  const me = mv.color;
+  const opp = other(me);
+  const rel = (sq) => (me === 'w' ? +sq[1] : 9 - +sq[1]);
+  const { from, to, piece } = mv;
+  const x = {
+    me,
+    opp,
+    piece,
+    from,
+    to,
+    san: mv.san,
+    captured: mv.captured ?? null,
+    promotion: mv.promotion ?? null,
+    castle: mv.isKingsideCastle() ? 'short' : mv.isQueensideCastle() ? 'long' : null,
+    check: after.inCheck(),
+    mate: after.isCheckmate(),
+    stalemate: after.isStalemate(),
+    inCheckBefore: before.inCheck(),
+    relFrom: rel(from),
+    relTo: rel(to),
+    forward: rel(to) > rel(from),
+    retreat: rel(to) < rel(from),
+    lateral: rel(to) === rel(from),
+    twoStep: piece === 'p' && Math.abs(+to[1] - +from[1]) === 2,
+    develop: 'nb'.includes(piece) && rel(from) === 1,
+    moveNo: before.moveNumber(),
+    before,
+    after,
+  };
+  x.dir = x.retreat ? 'về' : x.forward ? (x.relTo >= 6 ? 'xuống' : 'lên') : 'sang';
+  if (x.mate) return x;
+
+  const mine = after.attackers(to, me).length;
+  x.safe = !after.attackers(to, opp).length || (mine > 0 && !isHanging(after, to));
+  x.hanging = isHanging(after, to);
+  x.escape = !x.captured && piece !== 'k' && isHanging(before, from) && !isHanging(after, to);
+  x.blocksCheck = x.inCheckBefore && piece !== 'k' && !x.captured;
+
+  // New attacks by the moved piece that actually threaten something.
+  const hits = pieces(after, opp).filter((t) => after.attackers(t.square, me).includes(to));
+  x.threats = hits.filter((t) => {
+    if (t.type === 'k' || before.attackers(t.square, me).includes(from) || isHanging(before, t.square)) return false;
+    const undefended = !after.attackers(t.square, opp).length;
+    if (!(WORTH[t.type] > WORTH[piece] || undefended)) return false;
+    // A target that can simply take the attacker is not really threatened.
+    if (after.attackers(to, opp).includes(t.square) && (!mine || WORTH[piece] >= WORTH[t.type])) return false;
+    return true;
+  });
+  x.threats.sort((a, b) => WORTH[b.type] - WORTH[a.type]);
+  if (x.captured && !x.safe) x.threats = x.threats.filter((t) => WORTH[t.type] > WORTH[piece] && 'qr'.includes(t.type));
+  // "Tấn công đôi" only when both targets matter; otherwise name the big one.
+  if (x.threats.length >= 2 && x.threats.filter((t) => WORTH[t.type] >= 3).length < 2) x.threats = x.threats.slice(0, 1);
+  // A check that is answered by taking the checker wins nothing.
+  x.checkerTakeable = x.check && after.moves({ verbose: true }).some((m) => m.to === to);
+  // Gives up more than it takes, on purpose or not.
+  x.givesUp = !!x.captured && x.hanging && WORTH[piece] - WORTH[x.captured] >= 2 && piece !== 'k';
+  // Equal piece, both sides defended: a trade offer.
+  if (!x.captured && x.safe && mine > 0) {
+    x.tradeOffer = hits.find(
+      (t) =>
+        t.type === piece &&
+        'nbrq'.includes(t.type) &&
+        after.attackers(t.square, opp).length &&
+        !before.attackers(t.square, me).includes(from) &&
+        after.moves({ square: t.square, verbose: true }).some((m) => m.to === to), // they can take back (not pinned)
+    );
+  }
+  // One more attacker on something already under fire.
+  if (!x.threats.length) {
+    x.pressure = hits.find((t) => {
+      if (t.type === 'k' || before.attackers(t.square, me).includes(from)) return false;
+      const n = after.attackers(t.square, me).length;
+      return n >= 2 && n >= guardsOf(after, t.square, opp) && before.attackers(t.square, me).length >= 1;
+    });
+  }
+  // A piece of ours that was en prise and now is not, with the mover guarding it.
+  x.defends = piece === 'k' ? null : pieces(before, me).find(
+    (p) => p.square !== from && isHanging(before, p.square) && after.get(p.square) && !isHanging(after, p.square) && after.attackers(p.square, me).includes(to),
+  );
+  // Or one more defender for a piece under as much fire as it has guards.
+  if (!x.defends && piece !== 'k') {
+    x.guards = pieces(before, me).find(
+      (p) =>
+        p.square !== from &&
+        p.type !== 'k' &&
+        after.get(p.square) &&
+        after.attackers(p.square, me).includes(to) &&
+        !before.attackers(p.square, me).includes(from) &&
+        before.attackers(p.square, opp).length >= Math.max(1, guardsOf(before, p.square, me)),
+    );
+  }
+  // Stops a mate the opponent was threatening.
+  const flip = (c, turn) => new Chess(c.fen().replace(/ [wb] /, ` ${turn} `).replace(/ [a-h][36] /, ' - '));
+  try {
+    const threatBefore = mateThreat(flip(before, me));
+    x.stopsMate = !!threatBefore && !x.mate && !mateThreat(flip(after, me));
+  } catch {
+    x.stopsMate = false;
+  }
+  const tactics = lineTactics(after, to).filter((t) => !before.get(from) || !lineTactics(before, from).some((u) => u.front.square === t.front.square));
+  x.pin = x.captured && !x.safe ? null : (tactics[0] ?? null);
+  // Discovered attack: moving away lets another piece hit something.
+  for (const t of pieces(after, opp)) {
+    if (t.type === 'p') continue;
+    const fresh = after.attackers(t.square, me).filter((a) => a !== to && !before.attackers(t.square, me).includes(a));
+    if (fresh.length && (t.type === 'k' || isHanging(after, t.square))) {
+      x.opened = { by: after.get(fresh[0]).type, type: t.type, square: t.square };
       break;
     }
-    prevUci = m.captured ? pv[i] : null;
-    if (i === 0) text = `${names[color]} sẽ ${t}`;
-    else if (i % 2 === 1) text += `, ${names[color]} ${t}`;
-    else text += ` thì ${names[color]} sẽ ${t}`;
-    if (chess.isCheckmate()) return `${text} — chiếu hết!`;
   }
-  const swing = balance() - start;
-  const loser = first === 'w' ? 'đen' : 'trắng';
-  if (swing >= 3) text += ` và cờ ${loser} sẽ toang`;
-  return text;
+  x.mateThreat = !x.check ? mateThreat(after) : null;
+  const weak = me === 'w' ? 'f7' : 'f2';
+  if (after.get(weak)?.color === opp && after.get(weak).type !== 'k' && after.attackers(weak, me).includes(to) && !castled(after, opp)) x.weakPoint = weak;
+
+  // Castling: does the rook land on something?
+  if (x.castle) {
+    const rSq = (x.castle === 'short' ? 'f' : 'd') + to[1];
+    const t = pieces(after, opp).find((q) => q.type !== 'k' && q.type !== 'p' && after.attackers(q.square, me).includes(rSq));
+    if (t) x.rookHits = { file: rSq[0], target: t };
+  }
+  // Quiet ideas.
+  const oppKing = pieces(after, opp).find((p) => p.type === 'k').square;
+  const myKing = pieces(after, me).find((p) => p.type === 'k').square;
+  if (piece === 'p') {
+    const home = me === 'w' ? { f: 'f1', c: 'c1' } : { f: 'f8', c: 'c8' };
+    const fian = { g: me === 'w' ? 'g2' : 'g7', b: me === 'w' ? 'b2' : 'b7' };
+    if (x.relFrom === 2 && (from[0] === 'g' || from[0] === 'b') && x.relTo === 3) {
+      const bSq = from[0] === 'g' ? home.f : home.c;
+      if (after.get(bSq)?.type === 'b' && after.get(bSq).color === me) x.fianchettoPrep = fian[from[0]];
+    }
+    for (const bSq of [home.c, home.f]) {
+      const b = before.get(bSq);
+      if (b?.type === 'b' && b.color === me && !reach(before, bSq).some((s) => !before.get(s)) && reach(after, bSq).some((s) => !after.get(s)))
+        x.opensBishop = bSq;
+    }
+    if (isPassed(after, to, me) && x.relTo >= 6) x.passed = true;
+    // Pawn levers: hitting an enemy pawn, or about to.
+    const lever = reach(after, to).find((s) => after.get(s)?.type === 'p' && after.get(s).color === opp);
+    if (lever && x.relTo >= 4) x.lever = { square: lever, center: 'cdef'.includes(lever[0]) };
+    else if (x.relTo >= 4 && 'abgh'.includes(to[0])) {
+      const next = to[0] + (+to[1] + (me === 'w' ? 1 : -1));
+      const probe = new Chess(after.fen());
+      probe.remove(to);
+      if (!probe.get(next)) {
+        probe.put({ type: 'p', color: me }, next);
+        const hit = reach(probe, next)
+          .map((s) => probe.get(s))
+          .filter((q) => q && q.color === opp && q.type !== 'k')
+          .sort((a, b) => WORTH[b.type] - WORTH[a.type])[0];
+        if (hit) x.threatensPush = { square: next, type: hit.type };
+      }
+    }
+    // Shutting an enemy bishop out.
+    for (const b of pieces(after, opp).filter((q) => q.type === 'b')) {
+      const left = reach(after, b.square).length;
+      const lost = reach(before, b.square).length - left;
+      if (lost >= 3 || (lost >= 2 && left <= 3)) x.shutsBishop = b.square;
+    }
+    const wing = (sq) => ('fgh'.includes(sq[0]) ? 'k' : 'abc'.includes(sq[0]) ? 'q' : null);
+    if (x.relTo >= 4 && wing(to) && wing(to) === wing(oppKing) && castled(after, opp) && wing(myKing) !== wing(to)) x.storm = wing(to);
+    // Prophylaxis: the pawn now covers a square an enemy minor piece could jump to.
+    const covers = reach(after, to).filter((s) => !before.attackers(s, me).some((a) => before.get(a).type === 'p'));
+    let probe;
+    try {
+      probe = new Chess(`${before.fen().split(' ')[0]} ${opp} - - 0 1`);
+    } catch {
+      probe = null;
+    }
+    // …and only squares worth jumping to: from there it would hit one of our pieces or the king.
+    const jump = probe?.moves({ verbose: true }).find((m) => {
+      if (!'nb'.includes(m.piece) || !covers.includes(m.to) || m.captured) return false;
+      probe.move(m);
+      const hits = pieces(probe, me).some((q) => q.type !== 'p' && probe.attackers(q.square, opp).includes(m.to));
+      probe.undo();
+      return hits;
+    });
+    if (jump) x.denies = { type: jump.piece, square: jump.to };
+  }
+  if (piece === 'b' && [me === 'w' ? 'g2' : 'g7', me === 'w' ? 'b2' : 'b7'].includes(to)) x.longDiagonal = true;
+  if (piece === 'r' || piece === 'q') {
+    const file = to[0];
+    const pawnsOn = (c) => pieces(after, c).some((p) => p.type === 'p' && p.square[0] === file);
+    if (piece === 'r' && from[0] !== file && !pawnsOn(me)) x.file = pawnsOn(opp) ? 'half' : 'open';
+    const partner = pieces(after, me).find((p) => p.square !== to && p.square[0] === file && 'rq'.includes(p.type));
+    if (partner && from[0] !== file && !pawnsOn(me)) {
+      const [lo, hi] = [+to[1], +partner.square[1]].sort((a, b) => a - b);
+      let clear = true;
+      for (let r = lo + 1; r < hi; r++) if (after.get(file + r)) clear = false;
+      if (clear) x.doubled = partner.type;
+    }
+    if (piece === 'r' && x.relTo === 7) x.seventh = true;
+  }
+  if (piece === 'n' && x.develop) x.center = reach(after, to).some((s) => CENTER.includes(s));
+  if (piece === 'k' && !x.castle) {
+    const heavy = pieces(before).filter((p) => 'qrbn'.includes(p.type)).reduce((s, p) => s + WORTH[p.type], 0);
+    const dist = (sq) => Math.max(Math.abs(FILES.indexOf(sq[0]) - 3.5), Math.abs(+sq[1] - 4.5));
+    if (heavy <= 26 && dist(to) < dist(from)) x.kingCentre = true;
+  }
+  return x;
+}
+
+/** The move itself, in commentator verbs: "phát triển mã cánh vua lên F6", "lắc hậu sang E2"… */
+function verb(x, pick, recapture = false) {
+  const P = PW[x.piece];
+  const S = SQ(x.to);
+  const D = x.dir;
+  if (x.castle) return x.castle === 'short' ? 'nhập thành' : 'nhập thành cánh hậu';
+  if (x.promotion) {
+    const how = x.captured ? `ăn ${PW[x.captured]} ${S}` : `thúc tốt xuống ${S}`;
+    return `${how} phong ${PW[x.promotion]}`;
+  }
+  if (x.captured) {
+    const C = PW[x.captured];
+    if (x.piece === 'p') return recapture ? `ăn tốt lên ${S}` : x.captured === 'p' ? `ăn tốt sang ${S}` : `ăn ${C} ${S}`;
+    if (x.piece === 'k') return `dùng vua ăn ${C} ${S}`;
+    if (recapture) return `ăn ${P} ${D} ${S}`;
+    return `ăn ${P} vào ${C} ${S}`;
+  }
+  switch (x.piece) {
+    case 'p':
+      if (x.relTo >= 6) return pick(`thúc tốt tiến xuống ${S}`, `lao tốt xuống ${S}`);
+      if (x.relTo === 5) return pick(`thúc tốt tiến sang ${S}`, `thúc tốt tràn sang ${S}`);
+      return x.twoStep ? pick(`dâng tốt ${S}`, `đẩy tốt ${S}`) : `đẩy tốt ${S}`;
+    case 'n':
+      if (x.develop) return pick(`phát triển mã cánh ${'efgh'.includes(x.from[0]) ? 'vua' : 'hậu'} lên ${S}`, `triển khai mã lên ${S}`);
+      if (x.retreat) return x.escape && x.relFrom - x.relTo >= 2 ? `kéo mã chạy hẳn về ${S}` : pick(`lùi mã về ${S}`, `kéo mã lùi về ${S}`);
+      if (x.escape) return `chạy mã ${D} ${S}`;
+      return pick(`nhảy mã ${S}`, `tung mã ${D} ${S}`);
+    case 'b':
+      if (x.develop) return pick(`triển khai tượng lên ${S}`, `phát triển tượng lên ${S}`);
+      if (x.retreat) return pick(`lùi tượng về ${S}`, `kéo tượng lùi về ${S}`);
+      if (x.escape) return `chạy tượng ${D} ${S}`;
+      return pick(`phi tượng ${D} ${S}`, `đưa tượng ${D} ${S}`);
+    case 'q':
+      if (x.retreat) return pick(`kéo hậu lùi về ${S}`, `chạy hậu về ${S}`);
+      if (x.lateral) return pick(`lắc hậu sang ${S}`, `lắc hậu qua ${S}`);
+      if (x.escape) return `chạy hậu ${D} ${S}`;
+      if (x.relTo >= 6) return pick(`phi hậu xuống ${S}`, `lao hậu xuống ${S}`);
+      if (x.relFrom === 1 && x.relTo <= 3 && !x.threats.length) return pick(`tiến hậu lên ${S}`, `đưa hậu lên ${S}`);
+      return pick(`phi hậu lên ${S}`, `tung hậu lên ${S}`);
+    case 'r':
+      if (x.lateral && x.relFrom === 1) return pick(`qua xe ${S}`, `đưa xe qua ${S}`);
+      if (x.lateral) return pick(`chạy xe sang ${S}`, `lắc xe sang ${S}`);
+      if (x.retreat) return pick(`kéo xe lùi về ${S}`, `lùi xe về ${S}`);
+      if (x.relTo >= 6) return `lao xe xuống ${S}`;
+      return pick(`tiến xe lên ${S}`, `đưa xe lên ${S}`);
+    case 'k':
+      if (x.inCheckBefore) return pick(`chạy vua ${D} ${S}`, `kéo vua ${D} ${S}`);
+      return pick(`đưa vua ${D} ${S}`, `di chuyển vua ${D} ${S}`);
+  }
+  return x.san;
+}
+
+/** What a single threat means: "đuổi hậu", "bắt xe", "uy hiếp tốt C5", "tấn công mã". */
+function threatWords(x, t) {
+  if (t.type === 'p') return `uy hiếp tốt ${SQ(t.square)}`;
+  if (x.piece === 'p') return `${t.type === 'r' || t.type === 'q' ? 'bắt' : 'đuổi'} ${PW[t.type]}`;
+  if (WORTH[x.piece] < WORTH[t.type]) return t.type === 'q' ? 'đuổi hậu' : `bắt ${PW[t.type]}`;
+  return `tấn công ${PW[t.type]}`;
+}
+
+function pairWords(ts) {
+  const [a, b] = ts;
+  if (a.type === b.type) return `cặp ${PW[a.type]}`;
+  return `${nameOf(a)} và ${nameOf(b)}`;
+}
+
+/** Why the move is played, most important first (at most two reasons). */
+function reasons(x, { recapture = false } = {}) {
+  const out = [];
+  if (x.mate) return out;
+  if (x.check) {
+    const t = !x.checkerTakeable && x.threats.find((u) => WORTH[u.type] >= 3);
+    out.push(t ? `chiếu bắt ${PW[t.type]}` : 'chiếu');
+  } else if (x.blocksCheck) out.push('che chắn cho vua');
+  if (x.stopsMate && !x.check) out.push('chặn đòn chiếu hết');
+  if (x.piece === 'k' && x.inCheckBefore && !x.captured && !x.threats.length) out.push('tránh chiếu');
+
+  if (!x.check && x.threats.length >= 2) out.push(`tấn công đôi ${pairWords(x.threats)}`);
+  else if (x.pin && (x.pin.kind === 'pin' || !x.check)) {
+    const { front, back, kind } = x.pin;
+    if (kind === 'pin') out.push(`ghim ${named(front)} vào ${PW[back.type]}`);
+    else out.push(front.type === back.type ? `xiên vào cặp ${PW[front.type]}` : `xiên vào ${PW[front.type]} và ${PW[back.type]}`);
+  } else if (!x.check && x.threats.length === 1) out.push(threatWords(x, x.threats[0]));
+
+  if (x.weakPoint && !x.captured) out.push(`nhắm vào điểm yếu ${SQ(x.weakPoint)}`);
+  if (x.mateThreat) out.push('dọa chiếu hết');
+  if (x.captured || recapture) return out.slice(0, 2);
+  if (out.length < 2 && x.tradeOffer) out.push(`gạ đổi ${PW[x.tradeOffer.type]}`);
+  if (out.length < 2 && x.defends) out.push(`bảo vệ ${nameOf(x.defends)}`);
+  if (!out.length && x.pressure) out.push(`tăng thêm quân uy hiếp ${nameOf(x.pressure)}`);
+  if (!out.length && x.guards) out.push(`tăng thêm quân bảo vệ ${nameOf(x.guards)}`);
+  if (!out.length && x.opened && !x.check) out.push(`mở đường cho ${PW[x.opened.by]} tấn công ${PW[x.opened.type]}`);
+  if (out.length) return out.slice(0, 2);
+
+  // Quiet moves: the plan behind them.
+  if (x.castle) {
+    out.push('đưa vua vào vùng an toàn');
+    if (x.rookHits) out.push(`đồng thời đưa xe vào cột ${SQ(x.rookHits.file)} uy hiếp ${nameOf(x.rookHits.target)}`);
+  }
+  if (x.piece === 'p') {
+    if (x.shutsBishop) out.push(`bịt đường tấn công của tượng ${SQ(x.shutsBishop)}`);
+    if (CENTER.includes(x.to) && x.moveNo <= 30) out.push('chiếm lĩnh trung tâm');
+    else if (x.lever) out.push(x.lever.center ? 'đột phá vào trung tâm' : `công phá vào cứ điểm ${SQ(x.lever.square)}`);
+    else if (['c4', 'c5'].includes(x.to) && x.moveNo <= 4) out.push('kiểm soát trung tâm');
+    if (x.threatensPush && !x.lever)
+      out.push(`đe dọa sẽ tràn sang ${SQ(x.threatensPush.square)}${x.threatensPush.type === 'p' ? '' : ` đuổi ${PW[x.threatensPush.type]}`}`);
+    if (x.fianchettoPrep) out.push(`chuẩn bị đưa tượng lên ${SQ(x.fianchettoPrep)}`);
+    else if (x.opensBishop && !out.length) out.push(`mở đường cho tượng ${SQ(x.opensBishop)} xuất trận`);
+    if (x.passed) out.push('chuẩn bị phong hậu');
+    else if (x.storm) out.push(`tiến đánh cánh ${x.storm === 'k' ? 'vua' : 'hậu'}`);
+    if (!out.length && x.denies) out.push(`không cho ${PW[x.denies.type]} đối phương vào ${SQ(x.denies.square)}`);
+  }
+  if (x.longDiagonal) out.push('khống chế đường chéo lớn');
+  if (x.file) out.push(x.file === 'open' ? `chiếm cột mở ${SQ(x.to[0])}` : `tham chiến trên cột nửa mở ${SQ(x.to[0])}`);
+  if (x.doubled) out.push(`chồng ${x.doubled === 'q' || x.piece === 'q' ? 'hậu xe' : 'xe'} trên cột ${SQ(x.to[0])}`);
+  if (x.seventh) out.push('xuống hàng 7');
+  if (x.kingCentre) out.push('đưa vua ra trung tâm');
+  if (!out.length && x.develop) out.push(x.center && x.piece === 'n' && (x.to.charCodeAt(0) + +x.to[1]) % 2 ? 'kiểm soát trung tâm' : 'đưa quân xuất trận');
+  return out.slice(0, 2);
+}
+
+const clause = (act, why) => `${act}${why.length ? ` ${why.join(', ')}` : ''}`;
+
+/** Taking back on the square of the last capture, for about what was lost. */
+const isRecapture = (x, prev) => !!(x.captured && prev?.captured && prev.to === x.to && WORTH[x.captured] <= WORTH[prev.captured] + 2);
+
+/**
+ * "ăn hậu vào tốt B7 bắt xe" for any move in a line (used in what-if stories).
+ * @param {{to: string, captured: string}} [prev] the previous ply, if it captured
+ */
+function plainMove(fen, uci, prev) {
+  const x = inspect(fen, uci);
+  if (!x) return null;
+  const recapture = isRecapture(x, prev);
+  // In a story, a capture only needs its check or a hit on a big piece.
+  const why = reasons(x, { recapture }).filter((w) => !x.captured || /chiếu|hậu|xe/.test(w));
+  let text = clause(verb(x, first, recapture), why);
+  if (x.mate) text += ' chiếu hết';
+  return { x, text };
+}
+
+/** "lời một con tốt", "hơn chất"… from what each side took along a line. */
+function gainWords(mineTook, theirsTook) {
+  const a = [...mineTook];
+  const b = [...theirsTook];
+  const norm = (t) => (t === 'b' ? 'n' : t);
+  for (let i = a.length - 1; i >= 0; i--) {
+    const j = b.findIndex((t) => norm(t) === norm(a[i]));
+    if (j >= 0) {
+      a.splice(i, 1);
+      b.splice(j, 1);
+    }
+  }
+  const diff = a.reduce((s, t) => s + WORTH[t], 0) - b.reduce((s, t) => s + WORTH[t], 0);
+  if (diff <= 0) return null;
+  if (!b.length && a.length === 1) return `lời một con ${PW[a[0]]}`;
+  if (a.length === 1 && a[0] === 'r' && b.length === 1 && 'nb'.includes(b[0])) return 'hơn chất';
+  return diff >= 3 ? 'chiếm ưu thế lớn về lực lượng' : 'lời thêm chút vật chất';
+}
+
+/**
+ * Tell a line as the channel does: "Đen ăn mã vào C1 thì Trắng sẽ ăn tượng E6 bắt hậu.
+ * Đen chạy hậu lên E6 thì Trắng sẽ ăn xe sang C1 và Trắng sẽ hơn chất."
+ * @param {string} [hook] words slipped in before the first move ("tưởng ngon ")
+ */
+function tale(fen, pv, names, { hook = '', plies = 6, prev = null } = {}) {
+  const chess = new Chess(fen);
+  const a = chess.turn();
+  const took = { w: [], b: [] };
+  let text = '';
+  let last = prev;
+  let i = 0;
+  for (; i < Math.min(pv.length, plies); i++) {
+    const color = chess.turn();
+    const m = plainMove(chess.fen(), pv[i], last);
+    if (!m) break;
+    chess.move(uciToMove(pv[i]));
+    if (m.x.captured) took[color].push(m.x.captured);
+    last = m.x.captured ? { to: m.x.to, captured: m.x.captured } : null;
+    if (i === 0) text = `${names[color]} ${hook}${m.text}`;
+    else if (color === a) text += `. ${names[color]} ${m.text}`;
+    else text += ` thì ${names[color]} sẽ ${m.text}`;
+    if (chess.isCheckmate()) return text;
+    // Stop once the dust has settled: a quiet move after material changed hands.
+    const traded = took.w.length + took.b.length > 0;
+    if (i >= 1 && traded && !m.x.captured && !m.x.check && !m.x.threats.length) break;
+  }
+  const b = other(a);
+  const gainB = gainWords(took[b], took[a]);
+  const gainA = gainWords(took[a], took[b]);
+  if (gainB) return `${text} và ${names[b]} sẽ ${gainB}`;
+  if (gainA) return `${text} và ${names[a]} sẽ ${gainA}`;
+  return null; // nothing to show for it
 }
 
 /**
  * @param {object} ctx
- * @param {object} ctx.facts / ctx.tags  from describeMove() (+ game context tags)
- * @param {string} [ctx.cls]   move class
- * @param {'w'|'b'} ctx.color  side that moved
+ * @param {string} ctx.fen      position before the move
+ * @param {string[]} ctx.pv     engine line starting with this move
+ * @param {string} [ctx.cls]    move class
+ * @param {'w'|'b'} ctx.color   side that moved
  * @param {{w: string, b: string}} ctx.names  how to call each side ("Trắng", "Bạn", "Nakamura"…)
- * @param {object} [ctx.prev]  opponent's previous move: { cls, tags, facts }
- * @param {number} ctx.oppBad  opponent's weak moves among their last three
- * @param {number} [ctx.winAfter] mover's win % after the move
- * @param {string} ctx.fen     position before the move
- * @param {string[]} ctx.pv    engine line starting with this move
+ * @param {Set<string>} ctx.tags  describeMove() tags plus game context (sac, comboSac, missedMate…)
+ * @param {object} [ctx.facts]  describeMove() facts (bait, forcedTake, stoppedMate)
+ * @param {{fen: string, uci: string, cls?: string}} [ctx.prevMove] the opponent's last move
+ * @param {{fen: string, uci: string, sac?: boolean}} [ctx.myPrev] this side's previous move
+ * @param {object} [ctx.prev]   { cls, tags, facts } of the opponent's last move
+ * @param {number} [ctx.winBefore] / [ctx.winAfter] mover's win % around the move
+ * @param {object[]} [ctx.lines] engine lines (MultiPV) of the position before the move
  * @param {string[]} [ctx.refutationPv] best line for the opponent after a weak move
  * @param {string[]} [ctx.bestPv] best line instead of a weak move
- * @param {string} [ctx.nextUci] the move actually played next (to avoid telling what happens anyway)
+ * @param {string} [ctx.nextUci] the move actually played next (so we don't foretell it)
  * @param {string} [ctx.opening] opening name reached by this move
- * @param {number} ctx.ply     half-moves played including this one
+ * @param {number} ctx.ply      half-moves played including this one
  * @param {boolean} [ctx.short] one sentence only (hint list)
  * @param {string} ctx.seed
  */
 export function commentate(ctx) {
-  const { facts: f, tags, cls, color } = ctx;
-  if (!f) return null;
+  const x = inspect(ctx.fen, ctx.pv[0]);
+  if (!x) return null;
+  const tags = ctx.tags ?? new Set();
+  const f = ctx.facts ?? {};
+  const { cls, color } = ctx;
   const pick = picker(ctx.seed);
-  const oppColor = color === 'w' ? 'b' : 'w';
   const me = ctx.names[color];
-  const them = ctx.names[oppColor];
-  const meColor = color === 'w' ? 'trắng' : 'đen';
+  const them = ctx.names[other(color)];
   const strong = !cls || STRONG.has(cls);
-  const act = action(f, tags, pick);
-  const actC = `${act}${f.check ? ' chiếu' : ''}`; // action alone, keeping the check
-  const why = purpose(f, tags, ctx.opening, color);
-  const base = `${act}${why ? ` ${why}` : ''}`;
-  const prev = ctx.prev;
-  const prevStrongSac = prev?.tags?.has('sac') && STRONG.has(prev?.cls);
-  const bait = prev?.facts?.bait?.square ?? (prev?.tags?.has('sac') ? prev?.facts?.to : null);
-  const takesBait = f.captured && prevStrongSac && bait === f.to;
-  const afterFen = (() => {
-    const c = new Chess(ctx.fen);
-    try {
-      c.move(uciToMove(ctx.pv[0]));
-    } catch {
-      /* ignore */
-    }
-    return c.fen();
-  })();
-  const say = (main, whatIf) => {
+  const prevCls = ctx.prevMove?.cls ?? ctx.prev?.cls;
+  const prevBad = ['mistake', 'blunder'].includes(prevCls);
+  const P = ctx.prevMove ? inspect(ctx.prevMove.fen, ctx.prevMove.uci) : null; // their last move
+  const M = ctx.myPrev ? inspect(ctx.myPrev.fen, ctx.myPrev.uci) : null; // my last move
+  const recapture = isRecapture(x, P);
+  const prevCap = P?.captured ? { to: P.to, captured: P.captured } : null;
+  const why = reasons(x, { recapture });
+  const act = verb(x, pick, recapture);
+  const afterFen = x.after.fen();
+  const winAfter = ctx.winAfter ?? 50;
+
+  const say = (main, extra) => {
     let out = cap(main.trim());
     if (!/[.!?…]$/.test(out)) out += '.';
-    if (whatIf && !ctx.short) out += ` ${cap(whatIf)}${/[.!?]$/.test(whatIf) ? '' : '.'}`;
+    if (extra && !ctx.short) out += ` ${cap(extra.trim())}${/[.!?]$/.test(extra.trim()) ? '' : '.'}`;
     return out;
   };
+  const line = (lead, w = why, a = act) => `${lead}${me} ${a}${w.length ? ` ${w.join(', ')}` : ''}`;
+  const bestText = () => {
+    if (!ctx.bestPv?.length) return '';
+    const m = plainMove(ctx.fen, ctx.bestPv[0], prevCap);
+    return m?.text ?? '';
+  };
+  const story = (lead, ...args) => {
+    const t = tale(...args);
+    return t ? `${lead}${t}` : '';
+  };
+  const refute = (lead = 'Lúc này nếu ') => {
+    if (!ctx.refutationPv?.length || ctx.nextUci === ctx.refutationPv[0]) return '';
+    const prev = x.captured ? { to: x.to, captured: x.captured } : null;
+    const r = plainMove(afterFen, ctx.refutationPv[0], prev);
+    if (r?.x.mate) return `Lúc này ${them} chỉ cần ${r.text.replace(/ chiếu hết$/, '')} là chiếu hết`;
+    return story(lead, afterFen, ctx.refutationPv, ctx.names, { plies: 5, prev });
+  };
 
-  // How the move connects to what just happened.
-  let lead = me;
-  if (tags.has('turnaround') && strong) lead = `Lật kèo! ${me}`;
-  else if (['mistake', 'blunder'].includes(prev?.cls) && strong) lead = pick(`Chỉ chờ có thế, ${me}`, `Không chậm trễ, ${me}`, `Được ${them} cho quà, ${me} nhanh chóng`);
-  else if (ctx.oppBad >= 2 && strong && (f.check || f.captured || f.threatOn || f.mateThreat)) lead = `Thấy ${them} có vẻ gà, ${me}`;
+  // A quiet move with no visible point: say what it prepares (our next move in the line).
+  if (!why.length && !x.captured && !x.castle && strong && ctx.pv.length >= 3) {
+    try {
+      const c = new Chess(afterFen);
+      const reply = c.move(uciToMove(ctx.pv[1]));
+      const next = inspect(c.fen(), ctx.pv[2]);
+      const between = (a, b, c) => {
+        const [fa, ra, fb, rb, fc, rc] = [a, b, c].flatMap((q) => [FILES.indexOf(q[0]), +q[1]]);
+        const df = Math.sign(fc - fa), dr = Math.sign(rc - ra);
+        if ((fc - fa) * dr !== (rc - ra) * df && !(df === 0 || dr === 0)) return false;
+        for (let f = fa + df, r = ra + dr; f !== fc || r !== rc; f += df, r += dr) if (f === fb && r === rb) return true;
+        return false;
+      };
+      const linked =
+        next &&
+        !next.mate &&
+        (next.from === x.to || // same piece carries on
+          ('bqr'.includes(next.piece) && between(next.from, x.from, next.to)) || // we cleared its path
+          (next.after.attackers(next.to, color).includes(x.to) && next.after.attackers(next.to, other(color)).length)); // we cover its square
+      if (linked) {
+        const nextAct = verb(next, first, isRecapture(next, reply.captured ? { to: reply.to, captured: reply.captured } : null));
+        why.push(`chuẩn bị ${nextAct}`);
+      }
+    } catch {
+      /* stale line */
+    }
+  }
+  if (!why.length && x.retreat && 'nb'.includes(x.piece) && !x.captured && hash(ctx.seed) % 2) why.push('để phòng có biến');
+
+  // ----- opening name (takes the place of a second reason)
+  if (ctx.opening) why.splice(1, why.length, color === 'w' ? `triển khai lối chơi ${ctx.opening}` : `chọn ${ctx.opening}`);
+
+  // ----- game over
+  if (x.mate) {
+    const lead = prevBad ? 'Chỉ chờ có thế, ' : '';
+    // Mating while behind in material, or right after a sacrifice / their blunder.
+    const surprise = prevBad || !!ctx.myPrev?.sac || material(x.before, color) < material(x.before, other(color));
+    const kind = tags.has('smothered') ? ' chiếu ngộp' : ' chiếu hết';
+    return say(`${lead}${me} ${pick('lạnh lùng ', '')}${act}${kind}${surprise ? ` trong sự ngỡ ngàng của ${them}` : ''}`);
+  }
+  if (x.stalemate) return say(`${me} ${act}, nhưng ${them} đã hết nước đi — ván cờ hòa pat`);
 
   // ----- weak moves
   if (BAD.has(cls)) {
-    const refute =
-      ctx.refutationPv?.length && ctx.nextUci !== ctx.refutationPv[0]
-        ? `Lúc này ${storyOf(afterFen, ctx.refutationPv, ctx.names, pick, 3)}`
-        : '';
-    if (tags.has('missedMate')) return say(`${me} ${base}, bỏ lỡ cơ hội chiếu hết ngay trước mắt!`);
-    if (tags.has('bongcloud')) return say(`${me} ${act} — cho thượng đế xuất cung từ sớm, liều hay là tự tin đây?`, refute);
-    if (tags.has('earlyQueen')) return say(`${me} ${act}, cho em hậu ra trận quá sớm — coi chừng bị quân nhỏ rượt chạy khắp bàn!`, refute);
-    if (f.captured && cls !== 'inaccuracy')
-      return say(`Tưởng ${them} hớ hênh, ${me} nhanh chóng ${act}, mồm kêu mình xin`, refute);
-    if (cls === 'blunder') return say(`${me} ${base}. Một sai lầm chết người!`, refute);
-    if (cls === 'mistake') return say(`${me} ${base}, tưởng ngon nhưng lại là sai lầm`, refute);
-    const better = ctx.bestPv?.length ? describe(ctx.fen, ctx.bestPv, null, pick).text : '';
-    return say(`${me} ${base}, nước đi chưa thật chính xác`, better ? `Hay hơn là ${better}` : '');
+    if (tags.has('missedMate')) {
+      const b = bestText();
+      return say(`${line('')}, bỏ lỡ cơ hội chiếu hết`, b ? `Đáng lẽ ${me} chỉ cần ${b.replace(/ chiếu hết$/, ' là chiếu hết')}` : '');
+    }
+    if (prevBad && cls !== 'inaccuracy' && (ctx.winBefore ?? 0) >= 60) {
+      const b = bestText();
+      return say(`${me} bỏ lỡ cơ hội trừng phạt, ${act}${why.length ? ` ${why.join(', ')}` : ''}`, b ? `Đáng lẽ ${me} nên ${b}` : '');
+    }
+    if (x.captured && !recapture && cls !== 'inaccuracy') return say(`Tưởng ngon, ${line('')}`, refute());
+    if (cls === 'blunder') {
+      const r0 = ctx.refutationPv?.[0] ? inspect(afterFen, ctx.refutationPv[0]) : null;
+      const forgot = !r0
+        ? ''
+        : r0.mate
+          ? ` ${cap(me)} đã không nhìn thấy đòn chiếu hết`
+          : r0.captured && r0.to === x.to && WORTH[x.piece] >= 3
+            ? ` ${cap(me)} đã dâng ${PW[x.piece]} cho đối thủ`
+            : r0.from !== P?.to && r0.piece !== 'p' && (r0.captured || r0.check || r0.threats.length >= 2) && !x.threats.some((t) => t.square === r0.from)
+            ? ` ${cap(me)} đã quên mất ${them} còn con ${PW[r0.piece]} ở ${SQ(r0.from)}`
+            : '';
+      return say(`${line('')}. Một sai lầm nghiêm trọng!${forgot}`, refute());
+    }
+    if (cls === 'mistake') {
+      const b = bestText();
+      const main = b ? `Ở đây ${me} nên ${b}. Song ${me} lại có vẻ lóng ngóng khi ${act}` : `${line('')}, nước đi chưa ổn`;
+      return say(main, refute());
+    }
+    const b = bestText();
+    return say(line(''), b ? `Hay hơn là ${b}` : '');
   }
 
-  // ----- game over
-  if (tags.has('mate')) {
-    const tail = tags.has('longFinish') ? ` Sau ${Math.ceil(ctx.ply / 2)} nước giằng co, một cái kết đẳng cấp!` : '';
-    const how = tags.has('smothered') ? `${act}, thần mã luồn vào tận hậu cung` : act;
-    return say(`${lead} ${how} — chiếu hết trong sự ngỡ ngàng của ${them}!${tail}`);
-  }
-  if (tags.has('stalemate')) return say(`${me} ${act}… ôi không, thượng đế ${them} hết nước đi — hòa pat! Thắng đến nơi mà tiếc đứt ruột`);
-
-  // ----- forced replies and sacrifices accepted / declined
-  if (cls === 'forced') return say(`Cực chẳng đã, ${me} đành ${action(f, tags, pick, true)}${f.check ? ' chiếu' : ''}`);
-  if (takesBait) {
-    return ['brilliant', 'great'].includes(prev.cls)
-      ? say(pick(`Dù hơi chột dạ trước độ liều của đối thủ, ${me} vẫn ${act}`, `${me} đâu có ngại, ${act} luôn`))
-      : say(`Được ${them} cho quà, ${me} nhanh chóng ${act}`);
-  }
-  if (prev?.facts?.captured && ['mistake', 'blunder'].includes(prev.cls) && strong) {
-    return say(`Nhưng ${me} dâng ${PW[prev.facts.captured]} cho đối thủ xơi đâu phải vô cớ! ${cap(me)} lập tức ${base}`);
-  }
-  if (prevStrongSac && !f.captured && strong && cls !== 'excellent') {
-    return say(
-      cls === 'great'
-        ? `Trong cái khó ló cái khôn, ${me} không tham ăn mà tìm ra nước phòng thủ chuẩn xác: ${base}`
-        : `${me} không tham ăn, ${base}`,
-    );
+  // ----- forced replies
+  if (cls === 'forced') {
+    return say(`Cực chẳng đã, ${me} buộc phải ${verb(x, first, recapture)}${x.check ? ' chiếu' : ''}`);
   }
 
-  if (f.promotion) return say(`${lead} ${act} — thái giám hoá thái hậu!`);
+  if (x.promotion === 'q') return say(`${prevBad ? 'Chỉ chờ có thế, ' : ''}${me} ${act} — thái giám hoá thái hậu!`);
+  if (x.promotion) return say(`${me} ${act} thay vì phong hậu`);
 
   // ----- sacrifices
-  const givesUp = f.captured && f.hanging && WORTH[f.piece] - WORTH[f.captured] >= 2 && f.piece !== 'k';
-  if ((tags.has('sac') || givesUp) && strong && (ctx.winAfter ?? 50) >= 40) {
-    // "Already up so much he can afford it" — only when really far ahead in material.
-    const board = new Chess(ctx.fen).board().flat().filter(Boolean);
-    const mat = (c) => board.filter((p) => p.color === c && p.type !== 'k').reduce((sum, p) => sum + WORTH[p.type], 0);
-    const calm =
-      (ctx.winAfter ?? 0) >= 90 && mat(color) - mat(oppColor) >= 5 && !['brilliant', 'great'].includes(cls) && !tags.has('matingNet');
-    if (calm) return say(`Có lẽ hơn quá nhiều quân rồi nên ${me} thản nhiên ${base}`);
-    const pre = tags.has('comboSac') ? pick(`Chót đâm lao thì phải theo lao, ${me}`, `${me} tiếp tục chơi lớn,`) : lead;
-    const oneWhy = why.split(', ')[0];
-    const sacBase = `${act}${oneWhy ? ` ${oneWhy}` : ''}`;
+  const sac = (tags.has('sac') || (x.givesUp && !recapture)) && strong && winAfter >= 40;
+  if (sac) {
+    const bait = f.bait ?? { type: x.piece, square: x.to };
+    const lead = tags.has('comboSac') ? 'Chót đâm lao thì phải theo lao, ' : prevBad ? 'Chỉ chờ có thế, ' : '';
+    const w1 = why.slice(0, 1);
     let main;
-    if (tags.has('sacQ') && (f.forcedTake || f.check)) main = `${pre} ${sacBase}, nhét hậu vào mồm bắt ${them} ăn!`;
-    else if (f.bait && f.bait.square !== f.to) main = `${pre} ${sacBase}, bỏ cả ${term(f.bait)} mời ${them} xơi!`;
-    else main = `${pre} ${sacBase}, dí ${PW[f.piece]} vào mồm thách ${them} ăn!`;
-    const flourish = pick(`${them} không ngờ lại gặp phải thằng liều.`, 'Bàn cờ như nổ tung!', `${cap(me)} đang thả mồi thử lòng tham của đối thủ.`);
+    if (bait.type === 'q' && bait.square === x.to)
+      main = f.forcedTake
+        ? `${line(lead, w1)}, nhét hậu vào mồm bắt ${them} phải ăn`
+        : `${lead || pick(`Không ngờ ${them} lại gặp phải thằng liều, `, '')}${me} ${act.replace('phi hậu', 'phi thẳng hậu')}${w1.length ? ` ${w1[0]}` : ''}, dí hậu vào mồm ${them} thách ăn`;
+    else if (bait.square !== x.to) main = `${line(lead, w1)}, bỏ mặc ${named(bait)} cho ${them} ăn`;
+    else main = `${line(lead, w1)}, chấp nhận ${bait.type === 'r' ? 'phế xe' : `thí ${PW[bait.type]}`}`;
     let whatIf = '';
-    const baitSq = f.bait?.square ?? f.to;
-    if (ctx.pv.length > 2) {
+    if (ctx.pv.length > 2 && !f.forcedTake) {
       const c = new Chess(afterFen);
       try {
         const reply = c.move(uciToMove(ctx.pv[1]));
-        if (reply.to === baitSq && ctx.nextUci !== ctx.pv[1]) {
-          whatIf = `Nếu ${them} tham ăn thì ${storyOf(c.fen(), ctx.pv.slice(2), ctx.names, pick, 3)}`;
-        }
+        if (reply.to === bait.square && ctx.nextUci !== ctx.pv[1])
+          whatIf = story('Nếu mà ', afterFen, ctx.pv.slice(1), ctx.names, { hook: 'tưởng ngon ', plies: 5 });
       } catch {
         /* stale line */
       }
     }
-    return say(`${main} ${flourish}`, whatIf);
+    return say(`${main}${cls === 'brilliant' ? '!' : ''}`, whatIf);
   }
 
-  // ----- big tactics and big captures
-  if (tags.has('knightFork')) return say(`${lead} xuất chiêu thần mã hoá thần Zeus, ${act} chĩa đôi ${f.forkOn.map(term).join(' và ')}!`);
-  if (f.piece === 'k' && f.captured === 'q') return say(`Thượng đế bế quan âm! ${cap(me)} ${act}`);
-  if (f.captured === 'q') return say(`${lead} ${actC}, múc được em hậu thơm phức!`);
-  if (f.piece === 'q' && f.captured === 'r') return say(`Lớp trưởng vồ lớp phó! ${cap(me)} ${act}`);
-  if (tags.has('recapture')) return say(`Theo bản năng, ${me} ${action(f, tags, pick, true)}${f.check ? ' chiếu' : ''}`);
-  if (f.captured === 'r' && strong) return say(`${lead} ${actC}, chén em xe thơm phức!`);
-  if ((tags.has('freePiece') || tags.has('freeQueen')) && strong) return say(`${lead} ${actC}, mồm kêu mình xin`);
-  if (tags.has('matingNet') && f.check) return say(`${lead} tung đòn chiếu sát thủ, ${base}!`);
-  if (tags.has('matingNet')) return say(`${lead} ${base}, giăng lưới ép thượng đế ${them} vào tuyệt lộ!`);
+  // ----- answers to what the opponent just did
+  const prevSac = ctx.prev?.tags?.has('sac') && STRONG.has(prevCls);
+  if (prevSac && x.captured && f.forcedTake !== true && (ctx.prev?.facts?.bait?.square ?? P?.to) === x.to)
+    return say(`Không chút ngần ngại, ${line('', why, verb(x, pick, recapture))}`);
+  // Left something en prise on purpose, and we wisely don't take it.
+  const poison = P && STRONG.has(prevCls) && !x.captured && !x.inCheckBefore ? poisoned(x.before, ctx.lines) : null;
+  if (poison && strong && !x.check) {
+    return say(`Biết rằng quân ${PW[poison.type]} này có tẩm thuốc độc nên ${me} không dám đú đởn ăn uống linh tinh, ${act}${why.length ? ` ${why.join(', ')}` : ''}`);
+  }
+  if (prevBad && strong && !recapture && (x.captured || x.check || x.threats.length)) {
+    return say(line(pick('Chỉ chờ có thế, ', 'Không chậm trễ, ') + '', why, `lập tức ${act}`) + (x.captured && !recapture && x.safe && WORTH[x.captured] >= 3 ? ', mồm kêu mình xin' : ''));
+  }
+
+  // ----- captures
+  if (recapture) return say(line(''));
+  if (x.captured) {
+    const trade = WORTH[x.captured] === WORTH[x.piece] && !x.safe;
+    const pressed = P && (P.threats.length || P.tradeOffer);
+    if (trade && pressed && x.piece !== 'p')
+      return say(`${pick('Không muốn lằng nhằng', 'Không muốn đôi co nhiều với đối thủ')}, ${me} liền choảng luôn ${PW[x.piece]} vào ${x.captured === x.piece ? SQ(x.to) : `${PW[x.captured]} ${SQ(x.to)}`}${why.length ? ` ${why.join(', ')}` : ''}`);
+    if (x.piece === 'k' && x.captured === 'q') return say(`Thượng đế bế quan âm! ${cap(me)} ${act}`);
+    if (x.piece === 'q' && x.captured === 'r' && x.safe) return say(`Lớp trưởng vồ lớp phó! ${line('')}`);
+    const big = winAfter >= 85 && WORTH[x.captured] >= 3;
+    return say(line('', why, big ? `lạnh lùng ${act}` : act));
+  }
 
   // ----- defence
-  if (cls === 'great' && (f.inCheckBefore || f.stoppedMate || tags.has('escape') || (ctx.winAfter ?? 50) < 45))
-    return say(`Trong cái khó ló cái khôn, ${me} vẫn tìm ra nước phòng thủ chuẩn xác khi ${base}`);
-  if (f.stoppedMate || (tags.has('escape') && f.piece !== 'p')) {
-    if (f.piece === 'r' && f.retreat) return say(`Thấy nguy, ${me} cho xe tăng cài số lùi về ${SQ(f.to)}`);
-    return say(`Thấy nguy, ${me} vội ${base}`);
+  if (x.blocksCheck) return say(pick(`Theo bản năng, ${line('')}`, line('')));
+  if (x.piece === 'k' && x.inCheckBefore) {
+    const chased = tags.has('chased');
+    return say(chased ? `Bị truy sát ráo riết, ${line('')}` : line('', why.length ? why : ['tránh chiếu']));
   }
-  if (f.piece === 'k' && f.inCheckBefore) {
-    return tags.has('chased') ? say(pick(`Bị truy sát ráo riết, ${me} ${act}`, `Thượng đế ${meColor} lại phải ${act}`)) : say(`${me} ${base}`);
+  if (f.stoppedMate && strong) return say(`Thấy nguy, ${me} vội ${act} chặn đứng đòn chiếu hết${why.length ? `, ${why.join(', ')}` : ''}`);
+  if (P?.tradeOffer?.square === x.from && !x.captured && !P.threats.some((t) => t.square === x.from))
+    return say(line('', why.length && !why[0].startsWith('chuẩn bị') ? why : ['tránh giao chiến']));
+  if (x.escape) {
+    const rest = why.filter((w) => /^(tấn công|đuổi|bắt|uy hiếp|gạ đổi|ghim|xiên|chiếu|dọa)/.test(w));
+    const chasedTwice = M?.escape && M.to === x.from;
+    return say(`${chasedTwice ? 'Bị truy sát, ' : ''}${me} ${act} né đòn${rest.length ? `, đồng thời ${rest[0]}` : ''}`);
   }
+  if (x.defends && P?.threats.some((t) => t.square === x.defends.square)) return say(line('Thấy vậy, '));
 
-  // ----- building the attack
-  const notable = f.check || f.threatOn?.mild === false || f.mateThreat || f.opened || f.pin;
-  if (f.piece === 'r' && f.sameRank && notable && strong) return say(`${lead} xuất chiêu YouTuber lái wave tàu, ${base}!`);
-  if (f.piece === 'r' && f.forward && f.ranks >= 2 && notable && strong) return say(`${lead} xuất chiêu la hán đẩy xe bò, ${base}!`);
-  if (strong && cls !== 'excellent' && !f.check && !f.captured && TACTICAL.some((t) => f.followTags.has(t)))
-    return say(`${lead} ${base}, âm thầm chuẩn bị một mưu đồ đen tối`);
-  if (f.piece === 'b' && (f.pin || (f.threatOn && !f.threatOn.mild)) && strong) return say(`${lead} ${base} — voi chiến chảy nước miếng!`);
-  if ((f.mateThreat || f.weakPoint) && strong)
-    return say(`${lead} ${base}. ${pick('Một nước cờ tấn công cực kỳ quyết liệt!', 'Không hề nao núng!', 'Đòn tấn công bắt đầu!')}`);
-  if ((ctx.winAfter ?? 0) >= 95 && !f.captured && !f.check && strong && hash(ctx.seed) % 2)
-    return say(`Thắng thế quá rõ, ${me} ${base}, rung đùi chờ ${them} quit game`);
+  // ----- attack
+  const chase = M && P && M.threats.some((t) => t.square === P.from) && x.threats.some((t) => t.square === P.to);
+  if (chase) {
+    const t = x.threats.find((u) => u.square === P.to);
+    return say(`Chưa dừng lại ở đó, ${me} ${act} tiếp tục truy sát ${PW[t.type]}`);
+  }
+  if (x.piece === 'p' && x.threats.some((t) => 'nb'.includes(t.type) && t.square !== P?.to && x.relTo <= 4)) {
+    const t = x.threats.find((u) => 'nb'.includes(u.type));
+    if (rel(color, t.square) <= 4 && hash(ctx.seed) % 2)
+      return say(`Ngứa mắt với con ${PW[t.type]} cứ lượn lờ, ${me} ${act} đuổi ${PW[t.type]}, mồm kêu biến`);
+  }
+  const pushing =
+    M && x.forward && !x.captured && (x.threats.length || x.storm || x.lever || x.mateThreat) &&
+    ((M.to === x.from && M.forward) || (P && (P.escape || P.retreat) && M.threats.length));
+  if (pushing && strong) return say(line('Thừa thế xông lên, '));
+  if (strong && cls !== 'excellent' && !x.check && !x.threats.length && TACTIC.some((t) => f.followTags?.has(t))) {
+    let whatIf = '';
+    if (ctx.pv.length > 2 && ctx.nextUci !== ctx.pv[1]) {
+      const r = inspect(afterFen, ctx.pv[1]);
+      if (r?.captured) whatIf = story('Trường hợp mà ', afterFen, ctx.pv.slice(1), ctx.names, { hook: 'tưởng ngon ', plies: 5 });
+    }
+    return say(`${line('')}, âm thầm chuẩn bị một mưu đồ đen tối`, whatIf);
+  }
+  if (x.mateThreat && strong) return say(line(pick('', 'Không chậm trễ, ')));
 
-  // ----- plain narration
-  if (ctx.ply === 1 && !f.captured) return say(`${me} mở màn ván cờ bằng nước ${PW[f.piece]} ${SQ(f.to)}${why ? `, ${why}` : ''}`);
-  if (ctx.ply === 2 && !f.captured) return say(`${me} nhanh chóng đáp trả bằng nước ${PW[f.piece]} ${SQ(f.to)}${why ? `, ${why}` : ''}`);
-  const flourish = cls === 'brilliant' ? ' Một nước đi đẳng cấp!' : cls === 'great' ? ' Nước đi duy nhất, chuẩn không cần chỉnh!' : '';
-  return say(`${lead} ${base}.${flourish}`);
+  // ----- castling and calm moves
+  if (x.castle) {
+    if (castled(x.before, x.opp)) return say(`Không dám nấn ná để vua ở giữa bàn cờ lâu, ${me} vội vã nhập thành${x.castle === 'long' ? ' cánh hậu' : ''}, đưa vua vào vùng an toàn`);
+    if (M?.storm || M?.threats.length) return say(`Chưa thể đánh nhanh thắng nhanh, ${me} ${act} mau chóng đưa vua vào vùng an toàn`);
+    return say(line(''));
+  }
+  if (P?.storm && !x.captured && strong && !P.threats.length)
+    return say(line('Không hề nao núng, '));
+
+  // ----- opening moves
+  if (ctx.ply === 1) return say(`${me} ${pick('khai cuộc', 'mở màn ván cờ')} bằng nước ${PW[x.piece]} ${SQ(x.to)}${why.length ? `, ${why.join(', ')}` : ''}`);
+  if (ctx.ply === 2) return say(`${me} nhanh chóng đáp trả ${act}${why.length ? ` ${why.join(', ')}` : ''}`);
+
+  const adv = x.threats.some((t) => t.type !== 'p') && x.forward && !x.develop && hash(ctx.seed) % 3 === 0 ? pick('mạnh mẽ ', 'hùng hổ ') : '';
+  return say(`${line('', why, adv + act)}${cls === 'brilliant' ? '. Một nước đi thiên tài!' : ''}`);
 }
+
+/**
+ * A piece the opponent left en prise that the engine says not to take: the
+ * capture is ranked well below the best move, or misses the top lines while
+ * even the third line is clearly worse.
+ */
+function poisoned(before, lines) {
+  if (!lines?.length) return null;
+  const best = winPct(lines[0]);
+  const me = before.turn();
+  for (const m of before.moves({ verbose: true })) {
+    if (!m.captured || m.captured === 'k') continue;
+    if (!isHanging(before, m.to)) continue;
+    if (!pieces(before, other(me)).some((p) => p.square === m.to)) continue;
+    const uci = m.from + m.to + (m.promotion ?? '');
+    const own = lines.find((l) => l.pv[0] === uci);
+    // Poison means the grab actually backfires, not just that something else is stronger.
+    const last = winPct(lines[lines.length - 1]);
+    const clearlyWorse = own ? best - winPct(own) >= 20 && winPct(own) <= 55 : lines.length >= 3 && best - last >= 20 && last <= 55;
+    if (clearlyWorse) return { type: m.captured, square: m.to };
+  }
+  return null;
+}
+
+const TACTIC = ['knightFork', 'fork', 'royalFork', 'skewer', 'pinKing', 'discoveredCheck', 'mateThreat', 'matingNet'];
+const rel = (color, sq) => (color === 'w' ? +sq[1] : 9 - +sq[1]);

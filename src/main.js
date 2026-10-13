@@ -248,7 +248,7 @@ async function gradeMove(entry, depth = settings.depth) {
   entry.facts = d.facts;
   entry.result = r; // the commentary below reads this entry's neighbours
   if (['inaccuracy', 'mistake', 'blunder'].includes(r.cls) && own.pv.length > 1) r.refutationSan = uciToSan(entry.fen, own.pv[1]);
-  entry.commentInputs = { d, own, bestLine: before.lines[0] };
+  entry.commentInputs = { d, own, bestLine: before.lines[0], lines: before.lines };
   commentOn(entry);
   if (!r.isTop) {
     r.bestReasons = explainMove(prev.fen, before.lines[0], { max: 2, prevUci: lastCaptureUci(prev) });
@@ -335,12 +335,13 @@ function commentOn(entry) {
   const idx = history.indexOf(entry);
   const r = entry.result;
   if (idx < 1 || !r || !entry.commentInputs) return;
-  const { d, own, bestLine } = entry.commentInputs;
+  const { d, own, bestLine, lines } = entry.commentInputs;
   const weak = ['inaccuracy', 'mistake', 'blunder'].includes(r.cls);
   const cctx = commentaryContext(idx, history[idx - 1].fen, d, own, r.cls, bestLine, r, {
     refutationPv: weak ? own.pv.slice(1) : null,
     bestPv: r.isTop ? null : bestLine.pv,
     nextUci: history[idx + 1]?.uci,
+    lines,
   });
   entry.ctxTags = cctx.tags;
   r.banter = commentate(cctx);
@@ -350,8 +351,8 @@ function commentOn(entry) {
 function commentaryContext(ply, fen, d, line, cls, bestBefore, result, extra = {}) {
   const color = fen.split(' ')[1];
   const earlier = history.slice(1, ply);
-  const theirs = earlier.filter((h) => h.color !== color).slice(-3);
   const prev = earlier[earlier.length - 1];
+  const mine = ply >= 3 ? history[ply - 2] : null;
   return {
     facts: d.facts,
     tags: contextTags(ply, fen, d, line, bestBefore),
@@ -359,8 +360,11 @@ function commentaryContext(ply, fen, d, line, cls, bestBefore, result, extra = {
     color,
     names: sideNames(),
     prev: prev && prev.color !== color ? { cls: prev.result?.cls, tags: prev.ctxTags ?? prev.tags, facts: prev.facts } : null,
-    oppBad: theirs.filter((h) => ['inaccuracy', 'mistake', 'blunder'].includes(h.result?.cls)).length,
+    // The last move of each side, replayed by the commentator to link moves together.
+    prevMove: prev && prev.color !== color ? { fen: history[ply - 2].fen, uci: prev.uci, cls: prev.result?.cls } : null,
+    myPrev: mine?.uci && mine.color === color ? { fen: history[ply - 3].fen, uci: mine.uci, sac: !!mine.ctxTags?.has('sac') } : null,
     winAfter: result ? result.winAfter : winPct(line),
+    winBefore: result?.winBefore,
     fen,
     pv: line.pv,
     mate: line.mate > 0 ? line.mate : undefined,

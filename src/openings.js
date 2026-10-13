@@ -36,6 +36,10 @@ const BOOK = [
   ['d4 Nf6 c4 c5', 'phòng thủ Benoni'],
   ['d4 f5', 'phòng thủ Hà Lan'],
   ['c4', 'khai cuộc Anh'],
+  ['c4 e5', 'khai cuộc Anh'],
+  ['Nf3 c5 c4', 'khai cuộc Anh'],
+  ['Nf3 Nf6 c4', 'khai cuộc Anh'],
+  ['Nf3 d5 c4', 'khai cuộc Réti'],
   ['Nf3', 'khai cuộc Réti'],
   ['b3', 'khai cuộc Larsen'],
 ];
