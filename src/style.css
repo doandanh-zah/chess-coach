@@ -770,3 +770,29 @@ button:disabled {
 .story-item.pending {
   cursor: default;
 }
+
+/* commentary: each side in its own colour */
+.story-item.side-w {
+  background: #3b3934;
+  border-left: 4px solid #f0eee9;
+}
+.story-item.side-w span {
+  color: #f3efe6;
+}
+.story-item.side-b {
+  background: #1f1e1c;
+  border-left: 4px solid #5a5853;
+}
+.story-item.side-b span {
+  color: #a9b4c6;
+}
+.story-item.side-w:hover {
+  background: #45423c;
+}
+.story-item.side-b:hover {
+  background: #292826;
+}
+.story-item.cur {
+  outline: 2px solid #8fbf5a;
+  outline-offset: -2px;
+}

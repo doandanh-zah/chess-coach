@@ -1218,13 +1218,13 @@ function renderStory() {
     .map((h, i) => {
       if (i === 0) return '';
       if (h.result?.banter)
-        return `<div class="story-item${i === at ? ' cur' : ''}" data-ply="${i}">
-          <b>${moveNo(h)} ${h.san}</b>${badgeHtml(h.result.cls)}
+        return `<div class="story-item side-${h.color}${i === at ? ' cur' : ''}" data-ply="${i}">
+          <b><span class="dot ${h.color === 'w' ? 'white' : 'black'}"></span>${moveNo(h)} ${h.san}</b>${badgeHtml(h.result.cls)}
           <span>${h.result.banter}</span>
         </div>`;
       // The newest move is still being graded.
       return i === last && !reviewing
-        ? `<div class="story-item pending${i === at ? ' cur' : ''}" data-ply="${i}"><b>${moveNo(h)} ${h.san}</b><span></span><span class="muted">…</span></div>`
+        ? `<div class="story-item side-${h.color} pending${i === at ? ' cur' : ''}" data-ply="${i}"><b><span class="dot ${h.color === 'w' ? 'white' : 'black'}"></span>${moveNo(h)} ${h.san}</b><span></span><span class="muted">…</span></div>`
         : '';
     })
     .filter(Boolean);
