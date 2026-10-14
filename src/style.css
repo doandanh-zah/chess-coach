@@ -338,15 +338,6 @@ button.primary.active {
 }
 
 /* fun commentary + plan walkthrough */
-.banter {
-  margin: 6px 0 2px;
-  padding: 6px 10px;
-  border-radius: 6px;
-  background: #2f3a24;
-  color: #d6e9b8;
-  font-style: italic;
-  font-size: 13px;
-}
 .plan {
   margin-top: 6px;
   font-size: 12.5px;
@@ -395,7 +386,7 @@ button.primary.active {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 260px;
+  max-height: 320px;
   overflow-y: auto;
   margin-top: 8px;
 }
@@ -770,4 +761,12 @@ button:disabled {
     align-items: flex-start;
     gap: 4px;
   }
+}
+
+/* commentary card */
+.commentary .story-list {
+  margin-top: 4px;
+}
+.story-item.pending {
+  cursor: default;
 }

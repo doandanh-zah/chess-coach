@@ -209,7 +209,6 @@ async function analyzeCurrent() {
       ...c,
       reasons: d.reasons,
       plan: walkthrough(entry.fen, c.line.pv, 6, lastCaptureUci(entry)),
-      banter: commentate(commentaryContext(history.length, entry.fen, d, c.line, c.cls, null, null, { short: true })),
     };
   });
   renderAll();
@@ -530,6 +529,7 @@ function renderAll() {
   renderMoves();
   renderAccuracy();
   renderReview();
+  renderStory();
   drawShapes();
 }
 
@@ -640,7 +640,6 @@ function renderFeedback() {
         <div class="muted small">${who} · ${moveNo(entry)} · tỉ lệ thắng ${r.winBefore.toFixed(0)}% → ${r.winAfter.toFixed(0)}%</div>
       </div>
     </div>
-    ${banterHtml(r.banter)}
     <div class="fb-body">${explain}</div>
     ${
       r.refutation
@@ -663,10 +662,6 @@ function renderFeedback() {
 
 function whyHtml(reasons) {
   return reasons.map((t) => `<div>${t}</div>`).join('');
-}
-
-function banterHtml(text) {
-  return settings.banter && text ? `<div class="banter">🎙️ ${text}</div>` : '';
 }
 
 /** Collapsible step-by-step engine line with one reason per move. */
@@ -705,7 +700,6 @@ function renderHints() {
         <div class="hint-main">
           <div><b class="hint-san">${uciToSan(entry.fen, c.uci)}</b>
             <span class="hint-label" style="color:${cls.color}">${cls.label}</span></div>
-          ${banterHtml(c.banter)}
           <div class="why">${whyHtml(c.reasons)}</div>
           ${planHtml(c.plan, 'Diễn biến dự kiến', i === 0)}
         </div>
@@ -874,9 +868,7 @@ function bindSettings() {
   });
   on('setBanter', 'change', (t) => {
     settings.banter = t.checked;
-    renderFeedback();
-    renderHints();
-    renderReview();
+    renderStory();
   });
   on('setEvalBar', 'change', (t) => {
     settings.evalBar = t.checked;
@@ -1209,25 +1201,37 @@ function renderReview() {
   if (history.length > 1) {
     renderGraph();
     renderSummary();
-    renderStory();
   }
 }
 
-/** The whole game told as running commentary, one line per notable move. */
+/**
+ * The commentary card: the game told move by move, in its own place (not mixed
+ * into the hints). While playing it follows the newest move; in review it
+ * follows the move on the board.
+ */
 function renderStory() {
   $('storyBox').hidden = !settings.banter;
   if (!settings.banter) return;
+  const at = reviewing ? reviewIdx : history.length - 1;
+  const last = history.length - 1;
   const items = history
-    .map((h, i) => (h.result?.banter ? { h, i } : null))
-    .filter(Boolean)
-    .map(
-      ({ h, i }) => `<div class="story-item${i === reviewIdx ? ' cur' : ''}" data-ply="${i}">
-        <b>${moveNo(h)} ${h.san}</b>${badgeHtml(h.result.cls)}
-        <span>${h.result.banter}</span>
-      </div>`,
-    );
-  $('story').innerHTML = items.join('') || '<div class="muted small">Đang chuẩn bị bình luận…</div>';
+    .map((h, i) => {
+      if (i === 0) return '';
+      if (h.result?.banter)
+        return `<div class="story-item${i === at ? ' cur' : ''}" data-ply="${i}">
+          <b>${moveNo(h)} ${h.san}</b>${badgeHtml(h.result.cls)}
+          <span>${h.result.banter}</span>
+        </div>`;
+      // The newest move is still being graded.
+      return i === last && !reviewing
+        ? `<div class="story-item pending${i === at ? ' cur' : ''}" data-ply="${i}"><b>${moveNo(h)} ${h.san}</b><span></span><span class="muted">…</span></div>`
+        : '';
+    })
+    .filter(Boolean);
   const box = $('story');
+  box.innerHTML =
+    items.join('') ||
+    `<div class="muted small">${history.length > 1 ? 'Đang chuẩn bị bình luận…' : 'Đi một nước để nghe bình luận.'}</div>`;
   const cur = box.querySelector('.cur');
   if (cur) box.scrollTop = cur.offsetTop - box.offsetTop - box.clientHeight / 2; // keep the page itself still
 }
@@ -1299,7 +1303,9 @@ $('moves').addEventListener('click', (e) => {
 });
 $('story').addEventListener('click', (e) => {
   const item = e.target.closest('[data-ply]');
-  if (item) gotoPly(+item.dataset.ply);
+  if (!item) return;
+  if (reviewing) gotoPly(+item.dataset.ply);
+  else enterReview(+item.dataset.ply);
 });
 $('pgnLoad').onclick = () => {
   const err = loadPgn($('pgnText').value);
