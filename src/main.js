@@ -352,6 +352,7 @@ function commentaryContext(ply, fen, d, line, cls, bestBefore, result, extra = {
   const color = fen.split(' ')[1];
   const earlier = history.slice(1, ply);
   const prev = earlier[earlier.length - 1];
+  const theirs = earlier.filter((h) => h.color !== color).slice(-3);
   const mine = ply >= 3 ? history[ply - 2] : null;
   return {
     facts: d.facts,
@@ -362,7 +363,8 @@ function commentaryContext(ply, fen, d, line, cls, bestBefore, result, extra = {
     prev: prev && prev.color !== color ? { cls: prev.result?.cls, tags: prev.ctxTags ?? prev.tags, facts: prev.facts } : null,
     // The last move of each side, replayed by the commentator to link moves together.
     prevMove: prev && prev.color !== color ? { fen: history[ply - 2].fen, uci: prev.uci, cls: prev.result?.cls } : null,
-    myPrev: mine?.uci && mine.color === color ? { fen: history[ply - 3].fen, uci: mine.uci, sac: !!mine.ctxTags?.has('sac') } : null,
+    myPrev: mine?.uci && mine.color === color ? { fen: history[ply - 3].fen, uci: mine.uci, cls: mine.result?.cls, sac: !!mine.ctxTags?.has('sac') } : null,
+    oppBad: theirs.filter((h) => ['inaccuracy', 'mistake', 'blunder'].includes(h.result?.cls)).length,
     winAfter: result ? result.winAfter : winPct(line),
     winBefore: result?.winBefore,
     fen,
