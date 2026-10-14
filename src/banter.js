@@ -534,6 +534,9 @@ export function commentate(ctx) {
     return out;
   };
   const line = (lead, w = why, a = act) => `${lead}${me} ${a}${w.length ? ` ${w.join(', ')}` : ''}`;
+  /** "Trắng xuất chiêu voi chiến chảy nước miếng, dâng tượng lên G5 ghim mã F6 vào vua" */
+  const chiêu = (lead, name, a = act, w = why) => `${lead}${me} xuất chiêu ${name}, ${a}${w.length ? ` ${w.join(', ')}` : ''}`;
+  const rookBack = `kéo xe lùi về ${SQ(x.to)}`;
   const bestText = () => {
     if (!ctx.bestPv?.length) return '';
     const m = plainMove(ctx.fen, ctx.bestPv[0], prevCap);
@@ -728,7 +731,7 @@ export function commentate(ctx) {
 
   // ----- pouncing on their mistake
   if (prevBad && strong && !recapture && (x.captured || x.check || x.threats.length)) {
-    if (x.piece === 'q' && x.captured === 'r' && x.safe) return say(`Lớp trưởng vồ lớp phó! ${cap(me)} lập tức ${act}${why.length ? ` ${why.join(', ')}` : ''}`);
+    if (x.piece === 'q' && x.captured === 'r' && x.safe) return say(chiêu(pick('Chỉ chờ có thế, ', 'Không chậm trễ, '), 'lớp trưởng vồ lớp phó', `lập tức ${act}`));
     const lead = x.captured && x.safe ? pick('Chỉ chờ có thế, ', 'Không chậm trễ, ', `Được ${them} cho quà, `) : pick('Chỉ chờ có thế, ', 'Không chậm trễ, ');
     const how = lead.startsWith('Được') ? `nhanh chóng ${act}` : `lập tức ${act}`;
     return say(`${line(lead, why, how)}${yum()}`);
@@ -748,8 +751,8 @@ export function commentate(ctx) {
     const pressed = P && (P.threats.length || P.tradeOffer);
     if (trade && pressed && x.piece !== 'p')
       return say(`${pick('Không muốn lằng nhằng', 'Không muốn đôi co nhiều với đối thủ')}, ${me} liền choảng luôn ${PW[x.piece]} vào ${x.captured === x.piece ? SQ(x.to) : `${PW[x.captured]} ${SQ(x.to)}`}${why.length ? ` ${why.join(', ')}` : ''}`);
-    if (x.piece === 'k' && x.captured === 'q') return say(`Thượng đế bế quan âm! ${cap(me)} ${act}`);
-    if (x.piece === 'q' && x.captured === 'r' && x.safe) return say(`Lớp trưởng vồ lớp phó! ${line('')}`);
+    if (x.piece === 'k' && x.captured === 'q') return say(chiêu('', 'thượng đế bế quan âm'));
+    if (x.piece === 'q' && x.captured === 'r' && x.safe) return say(chiêu(gà, 'lớp trưởng vồ lớp phó'));
     const big = winAfter >= 85 && WORTH[x.captured] >= 3;
     return say(`${line(gà, why, big && !gà ? `lạnh lùng ${act}` : act)}${yum()}`);
   }
@@ -768,12 +771,12 @@ export function commentate(ctx) {
     const rest = why.filter((w) => /^(tấn công|đuổi|bắt|uy hiếp|gạ đổi|ghim|xiên|chiếu|dọa)/.test(w));
     const also = rest.length ? `, đồng thời ${rest[0]}` : '';
     const chasedTwice = M?.escape && M.to === x.from;
-    if (x.piece === 'r' && x.retreat) return say(`${chasedTwice ? 'Bị truy sát, ' : 'Thấy nguy, '}${me} cho xe tăng cài số lùi về ${SQ(x.to)}${also}`);
+    if (x.piece === 'r' && x.retreat) return say(`${chiêu(chasedTwice ? 'Bị truy sát, ' : 'Thấy nguy, ', 'xe tăng cài số lùi', rookBack, [])} né đòn${also}`);
     if (x.piece === 'q' && !chasedTwice && !x.check) return say(`Thấy nguy, ${me} vội ${act} né đòn${also}`);
     return say(`${chasedTwice ? 'Bị truy sát, ' : ''}${me} ${act} né đòn${also}`);
   }
   if (x.defends && P?.threats.some((t) => t.square === x.defends.square))
-    return say(x.piece === 'r' && x.retreat ? `Thấy vậy, ${me} cho xe tăng cài số lùi về ${SQ(x.to)} ${why.join(', ')}` : line('Thấy vậy, '));
+    return say(x.piece === 'r' && x.retreat ? chiêu('Thấy vậy, ', 'xe tăng cài số lùi', rookBack) : line('Thấy vậy, '));
 
   // ----- attack
   const chase = M && P && M.threats.some((t) => t.square === P.from) && x.threats.some((t) => t.square === P.to);
@@ -784,9 +787,9 @@ export function commentate(ctx) {
   if (x.check && tags.has('matingNet')) return say(`${gà}${me} tung đòn chiếu sát thủ, ${act}${why.length > 1 ? ` ${why.slice(1).join(', ')}` : ''}`);
   const loud = x.check || x.threats.some((t) => WORTH[t.type] >= 3) || x.mateThreat || x.pin;
   if (x.piece === 'r' && x.lateral && x.relTo >= 2 && loud && strong)
-    return say(`${gà}${me} xuất chiêu YouTuber lái wave tàu, ${act} ${why.join(', ')}`);
+    return say(chiêu(gà, 'YouTuber lái wave tàu'));
   if (x.piece === 'r' && x.forward && x.relTo - x.relFrom >= 2 && loud && strong)
-    return say(`${gà}${me} xuất chiêu la hán đẩy xe bò, lao thẳng xe ${x.dir} ${SQ(x.to)} ${why.join(', ')}`);
+    return say(chiêu(gà, 'la hán đẩy xe bò', `lao thẳng xe ${x.dir} ${SQ(x.to)}`));
   const pushing =
     M && x.forward && !x.captured && (x.threats.length || x.storm || x.lever || x.mateThreat) &&
     ((M.to === x.from && M.forward) || (P && (P.escape || P.retreat) && M.threats.length));
@@ -807,7 +810,7 @@ export function commentate(ctx) {
   // A bishop with something juicy in its sights.
   const juicy = x.threats.find((t) => 'qrk'.includes(t.type)) ?? (x.pin && 'qrk'.includes(x.pin.back.type) ? x.pin.back : null);
   if (x.piece === 'b' && juicy && strong && !x.check)
-    return say(`${line(gà)}, voi chiến chảy nước miếng nhìn về phía ${PW[juicy.type]} ${them}`);
+    return say(chiêu(gà, 'voi chiến chảy nước miếng', x.forward ? `dâng tượng ${x.dir} ${SQ(x.to)}` : act));
   if (x.mateThreat && strong) return say(line(gà || pick('', 'Không chậm trễ, ')));
   if (x.check && strong && x.piece === 'q' && x.forward && winAfter >= 85) return say(line(gà, why, `lạnh lùng ${act}`));
   // Quietly lining up on the king or a big piece.
@@ -825,7 +828,7 @@ export function commentate(ctx) {
   }
   if (P?.storm && !x.captured && strong && !P.threats.length)
     return say(line('Không hề nao núng, '));
-  if (x.piece === 'r' && x.retreat && x.relFrom - x.relTo >= 2) return say(`${me} cho xe tăng cài số lùi về ${SQ(x.to)}${why.length ? ` ${why.join(', ')}` : ''}`);
+  if (x.piece === 'r' && x.retreat && x.relFrom - x.relTo >= 2) return say(chiêu('', 'xe tăng cài số lùi', rookBack));
   // Cruising to victory.
   if (winAfter >= 95 && x.lead >= 5 && strong && !x.check && !x.captured && hash(ctx.seed) % 3 === 0)
     return say(`Thắng thế quá rõ, ${me} ${act}${why.length ? ` ${why.join(', ')}` : ''}, rung đùi chờ ${them} quit game`);
